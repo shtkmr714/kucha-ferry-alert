@@ -400,34 +400,45 @@ def generate_shortterm_message(analysis, ferry_status, warnings):
     jma_prob = get_jma_probability()
 
     situation = f"""
-【本日】{fmt(today_a)}
-【明日】{fmt(tomorrow_a)}
+【明日の予報】{fmt(tomorrow_a)}
+【明後日の予報】{fmt(analysis.get((datetime.now(JST) + timedelta(days=2)).strftime("%Y-%m-%d"), {}))}
 【気象庁 波高テキスト予報（公式）】
-  今日: {jma_waves.get('今日', '未取得')}
   明日: {jma_waves.get('明日', '未取得')}
   明後日: {jma_waves.get('明後日', '未取得')}
 【気象庁 早期注意情報（波浪警報級確率）】
   明日: {jma_prob.get('明日', {}).get('level', 'なし') or 'なし'}
   明後日: {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
 【気象庁注意報】{json.dumps(warnings, ensure_ascii=False) if warnings else 'なし'}
-【座間味村HP運航情報】{ferry_status or '未確認'}
+【座間味村HP運航情報（本日分）】{ferry_status or '未確認'}
 """
 
     prompt = f"""
 あなたはHomestay Kucha（沖縄・座間味島）のスタッフです。
-以下の気象・波データをもとにゲスト向けメッセージを生成してください。
+以下の明日・明後日の気象・波データをもとにゲスト向けメッセージを生成してください。
 
 {situation}
 
-以下3パターンを生成：
+【このメッセージの目的】
+ゲストが以下の判断を自分でできるよう、正直な情報を提供すること：
+- すでに島にいるゲスト：早めにチェックアウトして那覇に戻るか、延泊するかの判断
+- これから来るゲスト：旅程変更・キャンセルを検討するかの判断
 
-【パターンA】運航情報未確定（波に懸念あり・8時前）
-【パターンB】欠航または条件付き運航確認済み
-【パターンC】通常運航確認済み
+以下2パターンを生成：
+
+【パターンA】明日または明後日に欠航リスクあり（警戒レベル）
+- 具体的にいつ・どの便にリスクがあるかを明示
+- すでに島にいるゲストへの案内（早めの帰島を検討）
+- これから来るゲストへの案内（旅程変更の選択肢）
+- 最新情報は座間味村公式から確認するよう案内
+- キャンセル・変更を強制しない。あくまで判断材料として
+
+【パターンB】明日・明後日ともにリスク低め（念のため共有）
+- 現時点では問題なさそうだが予報は変わりうることを伝える
+- 短く・明るいトーンで
 
 各パターン：英語（Airbnb/Booking送信用）と日本語（参考）
-トーン：honest / warm / practical
-英語は3〜5文程度
+トーン：honest / warm / practical（Kuchaらしく）
+英語は4〜6文程度
 """
 
     resp = client.messages.create(
