@@ -12,8 +12,11 @@ import os
 import json
 import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 from anthropic import Anthropic
+
+JST = ZoneInfo("Asia/Tokyo")
 
 # ============================================================
 # 設定
@@ -166,23 +169,23 @@ def get_jma_forecast_waves():
         data = resp.json()
 
         result = {}
-        # timeSeries[0]に今日・明日・明後日の天気・波が入っている
         for series in data[0].get("timeSeries", []):
             times = series.get("timeDefines", [])
             for area in series.get("areas", []):
-                # 沖縄本島南部・慶良間周辺のエリアを対象
+                waves = area.get("waves", [])
+                if not waves:
+                    continue
                 area_name = area.get("area", {}).get("name", "")
-                if "沖縄本島南部" in area_name or "慶良間" in area_name or "那覇" in area_name:
-                    waves = area.get("waves", [])
-                    for i, wave in enumerate(waves):
-                        if i < len(times):
-                            dt = datetime.fromisoformat(times[i])
-                            delta = (dt.date() - datetime.now().date()).days
-                            label = {0: "今日", 1: "明日", 2: "明後日"}.get(delta)
-                            if label and wave:
-                                result[label] = wave
-                    if result:
-                        break  # 最初に見つかったエリアで十分
+                print(f"  [デバッグ] 波情報エリア: {area_name} / waves: {waves[:2]}")
+                for i, wave in enumerate(waves):
+                    if i < len(times):
+                        dt = datetime.fromisoformat(times[i])
+                        delta = (dt.date() - datetime.now(JST).date()).days
+                        label = {0: "今日", 1: "明日", 2: "明後日"}.get(delta)
+                        if label and wave:
+                            result[label] = wave
+                if result:
+                    break
 
         return result
 
@@ -198,10 +201,22 @@ def get_jma_probability():
     翌日・翌々日の波浪警報級確率（高/中/低）を返す。
     """
     try:
-        url = "https://www.jma.go.jp/bosai/probability/data/probability/4735400.json"
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
+        # 沖縄本島南部エリアコード（座間味村を含む予報区）
+        # 471010: 沖縄本島南部、4710100: 那覇市など
+        # まず471010を試し、404なら471000（沖縄県全体）にフォールバック
+        for area_code in ["471010", "4710100", "471000"]:
+            url = f"https://www.jma.go.jp/bosai/probability/data/probability/{area_code}.json"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                print(f"  [デバッグ] 早期注意情報 エリアコード{area_code} で取得成功")
+                break
+            print(f"  [デバッグ] 早期注意情報 エリアコード{area_code}: {resp.status_code}")
+        else:
+            print("  [警告] 早期注意情報: 有効なエリアコードが見つかりません")
+            return {}
+
         data = resp.json()
+        print(f"  [デバッグ] 早期注意情報データ: {json.dumps(data, ensure_ascii=False)[:200]}")
 
         result = {}
         # probabilityデータの構造をパース
@@ -212,7 +227,7 @@ def get_jma_probability():
                 continue
             try:
                 dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                delta = (dt.date() - datetime.now().date()).days
+                delta = (dt.date() - datetime.now(JST).date()).days
                 label = {1: "明日", 2: "明後日"}.get(delta)
                 if not label:
                     continue
@@ -242,7 +257,7 @@ def get_ferry_status_from_web():
         soup = BeautifulSoup(resp.text, "lxml")
         text_content = soup.get_text(separator="\n", strip=True)
 
-        today = datetime.now()
+        today = datetime.now(JST)
         date_patterns = [
             today.strftime("%Y年%m月%d日"),
             today.strftime("%m月%d日"),
@@ -342,12 +357,12 @@ def analyze_all_data(combined_data, warnings):
     """
     全データを日付・時間帯別に分析。
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(JST).strftime("%Y-%m-%d")
     results = {}
 
     # 今日〜7日後まで分析
     for delta in range(8):
-        date = (datetime.now() + timedelta(days=delta)).strftime("%Y-%m-%d")
+        date = (datetime.now(JST) + timedelta(days=delta)).strftime("%Y-%m-%d")
         day_data = [d for d in combined_data if d["date"] == date and 6 <= d["hour"] < 20]
         morning = [d for d in day_data if 6 <= d["hour"] < 12]
         afternoon = [d for d in day_data if 12 <= d["hour"] < 18]
@@ -370,8 +385,8 @@ def generate_shortterm_message(analysis, ferry_status, warnings):
     """短期予報メッセージ生成（今日・明日）"""
     client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(JST) + timedelta(days=1)).strftime("%Y-%m-%d")
 
     today_a = analysis.get(today, {})
     tomorrow_a = analysis.get(tomorrow, {})
@@ -517,7 +532,7 @@ def send_slack(message, emoji="⚠️"):
 # ============================================================
 
 def run_ferry_check():
-    now = datetime.now()
+    now = datetime.now(JST)
     print(f"\n{'='*50}")
     print(f"Kucha Ferry Alert v2: {now.strftime('%Y-%m-%d %H:%M')}")
     print('='*50)
@@ -550,8 +565,8 @@ def run_ferry_check():
     print("\n[3] データ分析中...")
     analysis = analyze_all_data(combined_data, warnings)
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(JST) + timedelta(days=1)).strftime("%Y-%m-%d")
     today_data = analysis.get(today, {}).get("all_day")
     tomorrow_data = analysis.get(tomorrow, {}).get("all_day")
 
