@@ -246,23 +246,20 @@ def generate_guest_message(wave_analysis, ferry_status_text, target_date="today"
 # 4. LINE Notifyで自分に送信
 # ============================================================
 
-def send_line_notify(message):
+def send_slack_notify(message):
     """
-    LINE Notifyで自分のスマホに通知を送る。
-    https://notify-bot.line.me/ でトークンを取得。
+    SlackのIncoming Webhookで通知を送る。
     """
-    token = os.getenv("LINE_NOTIFY_TOKEN")
-    if not token:
-        print("[LINE通知スキップ] LINE_NOTIFY_TOKENが未設定です")
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        print("[Slack通知スキップ] SLACK_WEBHOOK_URLが未設定です")
         return False
     
-    headers = {"Authorization": f"Bearer {token}"}
-    data = {"message": f"\n{message}"}
+    payload = {"text": message}
     
     resp = requests.post(
-        "https://notify-api.line.me/api/notify",
-        headers=headers,
-        data=data,
+        webhook_url,
+        json=payload,
         timeout=10
     )
     
