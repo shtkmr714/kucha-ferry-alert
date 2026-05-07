@@ -113,7 +113,8 @@ def get_marine_and_weather_data():
             "wind_wave_height": marine_data["hourly"]["wind_wave_height"][i],
             "swell_wave_height": marine_data["hourly"]["swell_wave_height"][i],
             "swell_wave_period": marine_data["hourly"]["swell_wave_period"][i],
-            "wind_speed": weather_data["hourly"]["wind_speed_10m"][i],
+            # wind_speed_10mはkm/hで返るのでm/sに変換（÷3.6）
+            "wind_speed": round(weather_data["hourly"]["wind_speed_10m"][i] / 3.6, 1) if weather_data["hourly"]["wind_speed_10m"][i] is not None else None,
             "wind_direction": weather_data["hourly"]["wind_direction_10m"][i],
             "visibility": weather_data["hourly"]["visibility"][i],
             "precipitation": weather_data["hourly"]["precipitation"][i],
@@ -583,25 +584,27 @@ def run_ferry_check():
     def risk_label(data, morning=None, afternoon=None):
         if not data:
             return "データなし"
-        hs = "⚠️高速船" if data["risk_highspeed"] else ""
-        fe = "⚠️フェリー" if data["risk_ferry"] else ""
-        risk = " ".join(filter(None, [hs, fe])) or "✅問題なし"
-        am = f"午前:{morning['max_wave']}m({'⚠️' if morning.get('risk_highspeed') else '✅'})" if morning else ""
-        pm = f"午後:{afternoon['max_wave']}m({'⚠️' if afternoon.get('risk_highspeed') else '✅'})" if afternoon else ""
+        hs = "[!高速船]" if data["risk_highspeed"] else ""
+        fe = "[!フェリー]" if data["risk_ferry"] else ""
+        risk = " ".join(filter(None, [hs, fe])) or "[OK]"
+        am_icon = "[!]" if morning and morning.get("risk_highspeed") else "[OK]"
+        pm_icon = "[!]" if afternoon and afternoon.get("risk_highspeed") else "[OK]"
+        am = f"午前:{morning['max_wave']}m{am_icon}" if morning else ""
+        pm = f"午後:{afternoon['max_wave']}m{pm_icon}" if afternoon else ""
         time_detail = f" [{am} / {pm}]" if am and pm else ""
         return f"波{data['max_wave']}m うねり{data.get('max_swell','?')}m 風{data.get('max_wind','?')}m/s → {risk}{time_detail}"
 
-    daily_summary = f"""📅 {now.strftime('%m/%d')} Kucha フェリー予報
+    daily_summary = f"""[{now.strftime('%m/%d')}] Kucha フェリー予報
 
-【明日】{risk_label(tomorrow_data, tomorrow_morning, tomorrow_afternoon)}
+[明日] {risk_label(tomorrow_data, tomorrow_morning, tomorrow_afternoon)}
   気象庁: {jma_waves.get('明日', '未取得')}
-  早期注意（波浪）: {jma_prob.get('明日', {}).get('level', 'なし') or 'なし'}
+  早期注意(波浪): {jma_prob.get('明日', {}).get('level', 'なし') or 'なし'}
 
-【明後日】{risk_label(day_after_data)}
+[明後日] {risk_label(day_after_data)}
   気象庁: {jma_waves.get('明後日', '未取得')}
-  早期注意（波浪）: {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
+  早期注意(波浪): {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
 
-【注意報】{'あり ⚠️' if warnings else 'なし ✅'}
+[注意報] {'あり(!!)' if warnings else 'なし'}
 """
 
     # ---- 短期アラート ----
