@@ -251,7 +251,7 @@ def send_slack_notify(message):
     SlackのIncoming Webhookで通知を送る。
     """
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-    print(f"[デバッグ] SLACK_WEBHOOK_URL取得: {'あり' if webhook_url else 'なし'}")
+    
     if not webhook_url:
         print("[Slack通知スキップ] SLACK_WEBHOOK_URLが未設定です")
         return False
