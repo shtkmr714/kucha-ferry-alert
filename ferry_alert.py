@@ -301,8 +301,7 @@ def run_ferry_check():
     
     if not has_risk:
         print("\n✅ 波高に問題なし。通常運航の見込みです。")
-        # 通知なしで終了（必要なら下の行をコメントアウト解除）
-        # send_line_notify("✅ 座間味フェリー：本日波高問題なし。通常運航の見込み。")
+        send_slack_notify("✅ 座間味フェリー：本日波高問題なし。通常運航の見込み。")
         return
     
     # 2. 座間味村HP 運航情報確認
