@@ -1,13 +1,11 @@
 """
-Kucha Ferry Alert System v2
+Kucha Ferry Alert System v3
 座間味島フェリー運航状況モニター＆ゲストメッセージ自動生成
 
-改良点：
-- メトリクス拡張（うねり・風速・風向・波周期・注意報）
-- 欠航スコアリングモデル導入
-- 長期予報（7日間）追加
-- 台風情報取得
-- Slack通知を短期・長期で分離
+改良点（v3）：
+- 気象庁forecast JSON追加（波高テキスト：今日〜明後日）
+- 気象庁早期注意情報追加（警報級確率：翌日・翌々日）
+- Open-Meteo数値 + 気象庁テキスト + 早期注意情報の3ソース統合
 """
 
 import os
@@ -153,6 +151,86 @@ def get_jma_warnings():
     except Exception as e:
         print(f"[警告] 気象庁API取得エラー: {e}")
         return []
+
+
+def get_jma_forecast_waves():
+    """
+    気象庁forecast JSONから沖縄地方の波高テキスト予報を取得。
+    今日・明日・明後日の3日分を返す。
+    例: {"今日": "1メートル後2メートル", "明日": "3メートル", "明後日": "4メートルのち5メートル"}
+    """
+    try:
+        url = "https://www.jma.go.jp/bosai/forecast/data/forecast/471000.json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        result = {}
+        # timeSeries[0]に今日・明日・明後日の天気・波が入っている
+        for series in data[0].get("timeSeries", []):
+            times = series.get("timeDefines", [])
+            for area in series.get("areas", []):
+                # 沖縄本島南部・慶良間周辺のエリアを対象
+                area_name = area.get("area", {}).get("name", "")
+                if "沖縄本島南部" in area_name or "慶良間" in area_name or "那覇" in area_name:
+                    waves = area.get("waves", [])
+                    for i, wave in enumerate(waves):
+                        if i < len(times):
+                            dt = datetime.fromisoformat(times[i])
+                            delta = (dt.date() - datetime.now().date()).days
+                            label = {0: "今日", 1: "明日", 2: "明後日"}.get(delta)
+                            if label and wave:
+                                result[label] = wave
+                    if result:
+                        break  # 最初に見つかったエリアで十分
+
+        return result
+
+    except Exception as e:
+        print(f"[警告] 気象庁forecast JSON取得エラー: {e}")
+        return {}
+
+
+def get_jma_probability():
+    """
+    気象庁早期注意情報から波浪の警報級確率を取得。
+    座間味村エリアコード: 4735400
+    翌日・翌々日の波浪警報級確率（高/中/低）を返す。
+    """
+    try:
+        url = "https://www.jma.go.jp/bosai/probability/data/probability/4735400.json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        result = {}
+        # probabilityデータの構造をパース
+        # 通常: [{date, items:[{phenomena, level}]}]
+        for entry in data:
+            date_str = entry.get("date", "")
+            if not date_str:
+                continue
+            try:
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                delta = (dt.date() - datetime.now().date()).days
+                label = {1: "明日", 2: "明後日"}.get(delta)
+                if not label:
+                    continue
+                for item in entry.get("items", []):
+                    phenomena = item.get("phenomena", "")
+                    if "波浪" in phenomena or "高波" in phenomena:
+                        result[label] = {
+                            "phenomena": phenomena,
+                            "level": item.get("level", ""),  # "高"/"中"/""
+                        }
+            except Exception:
+                continue
+
+        return result
+
+    except Exception as e:
+        print(f"[警告] 気象庁早期注意情報取得エラー: {e}")
+        return {}
 
 
 def get_ferry_status_from_web():
@@ -313,9 +391,20 @@ def generate_shortterm_message(analysis, ferry_status, warnings):
   フェリーリスク: {d.get('risk_ferry','?')}
   注意報: {'あり' if d.get('has_warning') else 'なし'}"""
 
+    # 気象庁テキスト予報・早期注意情報を追加取得
+    jma_waves = get_jma_forecast_waves()
+    jma_prob = get_jma_probability()
+
     situation = f"""
 【本日】{fmt(today_a)}
 【明日】{fmt(tomorrow_a)}
+【気象庁 波高テキスト予報（公式）】
+  今日: {jma_waves.get('今日', '未取得')}
+  明日: {jma_waves.get('明日', '未取得')}
+  明後日: {jma_waves.get('明後日', '未取得')}
+【気象庁 早期注意情報（波浪警報級確率）】
+  明日: {jma_prob.get('明日', {}).get('level', 'なし') or 'なし'}
+  明後日: {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
 【気象庁注意報】{json.dumps(warnings, ensure_ascii=False) if warnings else 'なし'}
 【座間味村HP運航情報】{ferry_status or '未確認'}
 """
@@ -444,9 +533,18 @@ def run_ferry_check():
         return
 
     # 2. 注意報取得
-    print("\n[2] 気象庁注意報確認中...")
+    print("\n[2] 気象庁データ取得中...")
     warnings = get_jma_warnings()
     print(f"  注意報: {len(warnings)}件")
+
+    jma_waves = get_jma_forecast_waves()
+    print(f"  気象庁波高テキスト: {jma_waves}")
+
+    jma_prob = get_jma_probability()
+    print(f"  早期注意情報（波浪）: 明日={jma_prob.get('明日',{}).get('level','なし')} / 明後日={jma_prob.get('明後日',{}).get('level','なし')}")
+
+    # 早期注意情報で「高」があれば短期リスクとして扱う
+    prob_risk = any(v.get("level") == "高" for v in jma_prob.values())
 
     # 3. 分析
     print("\n[3] データ分析中...")
@@ -464,7 +562,8 @@ def run_ferry_check():
     short_risk = (
         (today_data and (today_data["risk_highspeed"] or today_data["risk_ferry"])) or
         (tomorrow_data and (tomorrow_data["risk_highspeed"] or tomorrow_data["risk_ferry"])) or
-        len(warnings) > 0
+        len(warnings) > 0 or
+        prob_risk
     )
 
     if short_risk:
@@ -476,9 +575,11 @@ def run_ferry_check():
         # Slackに送信
         header = f"""🚢 Kucha フェリーアラート {now.strftime('%m/%d')}
 
-【本日】波{today_data['max_wave']}m / うねり{today_data.get('max_swell','?')}m / 風{today_data.get('max_wind','?')}m/s / スコア{today_data['cancellation_score']}
-  高速船: {'⚠️リスクあり' if today_data['risk_highspeed'] else '✅'}  フェリー: {'⚠️リスクあり' if today_data['risk_ferry'] else '✅'}
+【本日】波{today_data['max_wave'] if today_data else '?'}m / うねり{today_data.get('max_swell','?') if today_data else '?'}m / 風{today_data.get('max_wind','?') if today_data else '?'}m/s / スコア{today_data['cancellation_score'] if today_data else '?'}
+  高速船: {'⚠️リスクあり' if today_data and today_data['risk_highspeed'] else '✅'}  フェリー: {'⚠️リスクあり' if today_data and today_data['risk_ferry'] else '✅'}
 【明日】波{tomorrow_data['max_wave'] if tomorrow_data else '?'}m / スコア{tomorrow_data['cancellation_score'] if tomorrow_data else '?'}
+【気象庁テキスト】今日:{jma_waves.get('今日','?')} / 明日:{jma_waves.get('明日','?')}
+【早期注意（波浪）】明日:{jma_prob.get('明日',{}).get('level','なし')} / 明後日:{jma_prob.get('明後日',{}).get('level','なし')}
 【注意報】{'あり ⚠️' if warnings else 'なし ✅'}
 【運航情報】{ferry_status[:60] if ferry_status else '未確認（8時以降に再確認）'}
 
@@ -487,7 +588,7 @@ def run_ferry_check():
         print("  ✅ 短期アラート送信完了")
     else:
         print("\n[4] 短期: 問題なし（通知スキップ）")
-        send_slack(f"✅ {now.strftime('%m/%d')} 座間味フェリー：短期予報に問題なし（波高{today_data['max_wave'] if today_data else '?'}m）", emoji="")
+        send_slack(f"✅ {now.strftime('%m/%d')} 座間味フェリー：短期予報に問題なし（波高{today_data['max_wave'] if today_data else '?'}m / 気象庁:{jma_waves.get('今日','?')}）", emoji="")
 
     # ---- 長期アラート ----
     print("\n[5] 長期予報チェック中（3〜7日先）...")
@@ -499,6 +600,7 @@ def run_ferry_check():
             header = f"""🌊 Kucha 長期天候警戒 {now.strftime('%m/%d')}
 
 【懸念日】{risk_summary}
+【早期注意（波浪）】明日:{jma_prob.get('明日',{}).get('level','なし')} / 明後日:{jma_prob.get('明後日',{}).get('level','なし')}
 
 """
             send_slack(header + long_message[:1500], emoji="")
