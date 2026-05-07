@@ -1,0 +1,35 @@
+name: Kucha Ferry Alert
+
+on:
+  schedule:
+    # 毎朝7時（JST）に実行 → UTC 22時（前日）
+    - cron: '0 22 * * *'
+    # 毎朝8時15分（JST）に実行 → 座間味村HP更新後
+    - cron: '15 23 * * *'
+  
+  # 手動実行も可能
+  workflow_dispatch:
+
+jobs:
+  ferry-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests anthropic beautifulsoup4 lxml python-dotenv
+      
+      - name: Run Ferry Alert Check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LINE_NOTIFY_TOKEN: ${{ secrets.LINE_NOTIFY_TOKEN }}
+        run: |
+          python ferry_alert.py
