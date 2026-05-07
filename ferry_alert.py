@@ -342,12 +342,11 @@ def run_ferry_check():
     
     full_notification = alert_header + message[:1000]  # LINEの文字数制限対応
     
-    success = send_line_notify(full_notification)
+    success = send_slack_notify(full_notification)
     if success:
-        print("  ✅ LINE通知送信成功")
+        print("  ✅ Slack通知送信成功")
     else:
-        print("  [スキップ] LINE未設定のため標準出力のみ")
-    
+        print("  [スキップ] Slack未設定のため標準出力のみ")
     print("\n処理完了。メッセージを確認してゲストに送信してください。")
 
 
