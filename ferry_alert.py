@@ -176,7 +176,8 @@ def get_jma_forecast_waves():
                 if not waves:
                     continue
                 area_name = area.get("area", {}).get("name", "")
-                print(f"  [デバッグ] 波情報エリア: {area_name} / waves: {waves[:2]}")
+                if "中南部" not in area_name and "南部" not in area_name:
+                    continue
                 for i, wave in enumerate(waves):
                     if i < len(times):
                         dt = datetime.fromisoformat(times[i])
@@ -196,51 +197,39 @@ def get_jma_forecast_waves():
 
 def get_jma_probability():
     """
-    気象庁早期注意情報から波浪の警報級確率を取得。
-    座間味村エリアコード: 4735400
-    翌日・翌々日の波浪警報級確率（高/中/低）を返す。
+    気象庁早期注意情報（471000: 沖縄県）から波浪警報級確率を取得。
+    timeSeries → areas → properties 構造をパース。
+    翌日・翌々日の波浪警報級確率（高/中/なし）を返す。
     """
     try:
-        # 沖縄本島南部エリアコード（座間味村を含む予報区）
-        # 471010: 沖縄本島南部、4710100: 那覇市など
-        # まず471010を試し、404なら471000（沖縄県全体）にフォールバック
-        for area_code in ["471010", "4710100", "471000"]:
-            url = f"https://www.jma.go.jp/bosai/probability/data/probability/{area_code}.json"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                print(f"  [デバッグ] 早期注意情報 エリアコード{area_code} で取得成功")
-                break
-            print(f"  [デバッグ] 早期注意情報 エリアコード{area_code}: {resp.status_code}")
-        else:
-            print("  [警告] 早期注意情報: 有効なエリアコードが見つかりません")
-            return {}
-
+        url = "https://www.jma.go.jp/bosai/probability/data/probability/471000.json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
         data = resp.json()
-        print(f"  [デバッグ] 早期注意情報データ: {json.dumps(data, ensure_ascii=False)[:200]}")
 
         result = {}
-        # probabilityデータの構造をパース
-        # 通常: [{date, items:[{phenomena, level}]}]
         for entry in data:
-            date_str = entry.get("date", "")
-            if not date_str:
-                continue
-            try:
-                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                delta = (dt.date() - datetime.now(JST).date()).days
-                label = {1: "明日", 2: "明後日"}.get(delta)
-                if not label:
-                    continue
-                for item in entry.get("items", []):
-                    phenomena = item.get("phenomena", "")
-                    if "波浪" in phenomena or "高波" in phenomena:
-                        result[label] = {
-                            "phenomena": phenomena,
-                            "level": item.get("level", ""),  # "高"/"中"/""
-                        }
-            except Exception:
-                continue
-
+            for series in entry.get("timeSeries", []):
+                time_defines = series.get("timeDefines", [])
+                for area in series.get("areas", []):
+                    # 沖縄本島南部エリア（471010）に絞る
+                    if area.get("code") != "471010":
+                        continue
+                    for i, time_str in enumerate(time_defines):
+                        dt = datetime.fromisoformat(time_str)
+                        delta = (dt.date() - datetime.now(JST).date()).days
+                        label = {1: "明日", 2: "明後日"}.get(delta)
+                        if not label:
+                            continue
+                        for prop in area.get("properties", []):
+                            prop_type = prop.get("type", "")
+                            if "波浪" not in prop_type and "高波" not in prop_type:
+                                continue
+                            parts = prop.get("parts", [])
+                            if i < len(parts):
+                                level = parts[i].get("level", "")
+                                if level:
+                                    result[label] = {"type": prop_type, "level": level}
         return result
 
     except Exception as e:
@@ -567,43 +556,60 @@ def run_ferry_check():
 
     today = datetime.now(JST).strftime("%Y-%m-%d")
     tomorrow = (datetime.now(JST) + timedelta(days=1)).strftime("%Y-%m-%d")
+    day_after = (datetime.now(JST) + timedelta(days=2)).strftime("%Y-%m-%d")
+
     today_data = analysis.get(today, {}).get("all_day")
     tomorrow_data = analysis.get(tomorrow, {}).get("all_day")
+    day_after_data = analysis.get(day_after, {}).get("all_day")
+    tomorrow_morning = analysis.get(tomorrow, {}).get("morning")
+    tomorrow_afternoon = analysis.get(tomorrow, {}).get("afternoon")
 
     print(f"  本日: 波高{today_data['max_wave']}m / スコア{today_data['cancellation_score']}" if today_data else "  本日: データなし")
     print(f"  明日: 波高{tomorrow_data['max_wave']}m / スコア{tomorrow_data['cancellation_score']}" if tomorrow_data else "  明日: データなし")
+    print(f"  明後日: 波高{day_after_data['max_wave']}m / スコア{day_after_data['cancellation_score']}" if day_after_data else "  明後日: データなし")
+
+    # ---- 共通ヘッダー（毎回必ず送信） ----
+    def risk_label(data, morning=None, afternoon=None):
+        if not data:
+            return "データなし"
+        hs = "⚠️高速船" if data["risk_highspeed"] else ""
+        fe = "⚠️フェリー" if data["risk_ferry"] else ""
+        risk = " ".join(filter(None, [hs, fe])) or "✅問題なし"
+        am = f"午前:{morning['max_wave']}m({'⚠️' if morning.get('risk_highspeed') else '✅'})" if morning else ""
+        pm = f"午後:{afternoon['max_wave']}m({'⚠️' if afternoon.get('risk_highspeed') else '✅'})" if afternoon else ""
+        time_detail = f" [{am} / {pm}]" if am and pm else ""
+        return f"波{data['max_wave']}m うねり{data.get('max_swell','?')}m 風{data.get('max_wind','?')}m/s → {risk}{time_detail}"
+
+    daily_summary = f"""📅 {now.strftime('%m/%d')} Kucha フェリー予報
+
+【明日】{risk_label(tomorrow_data, tomorrow_morning, tomorrow_afternoon)}
+  気象庁: {jma_waves.get('明日', '未取得')}
+  早期注意（波浪）: {jma_prob.get('明日', {}).get('level', 'なし') or 'なし'}
+
+【明後日】{risk_label(day_after_data)}
+  気象庁: {jma_waves.get('明後日', '未取得')}
+  早期注意（波浪）: {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
+
+【注意報】{'あり ⚠️' if warnings else 'なし ✅'}
+"""
 
     # ---- 短期アラート ----
     short_risk = (
-        (today_data and (today_data["risk_highspeed"] or today_data["risk_ferry"])) or
         (tomorrow_data and (tomorrow_data["risk_highspeed"] or tomorrow_data["risk_ferry"])) or
+        (day_after_data and (day_after_data["risk_highspeed"] or day_after_data["risk_ferry"])) or
         len(warnings) > 0 or
         prob_risk
     )
 
     if short_risk:
         print("\n[4] 短期アラート: リスクあり → メッセージ生成中...")
-
         ferry_status = get_ferry_status_from_web()
         short_message = generate_shortterm_message(analysis, ferry_status, warnings)
-
-        # Slackに送信
-        header = f"""🚢 Kucha フェリーアラート {now.strftime('%m/%d')}
-
-【本日】波{today_data['max_wave'] if today_data else '?'}m / うねり{today_data.get('max_swell','?') if today_data else '?'}m / 風{today_data.get('max_wind','?') if today_data else '?'}m/s / スコア{today_data['cancellation_score'] if today_data else '?'}
-  高速船: {'⚠️リスクあり' if today_data and today_data['risk_highspeed'] else '✅'}  フェリー: {'⚠️リスクあり' if today_data and today_data['risk_ferry'] else '✅'}
-【明日】波{tomorrow_data['max_wave'] if tomorrow_data else '?'}m / スコア{tomorrow_data['cancellation_score'] if tomorrow_data else '?'}
-【気象庁テキスト】今日:{jma_waves.get('今日','?')} / 明日:{jma_waves.get('明日','?')}
-【早期注意（波浪）】明日:{jma_prob.get('明日',{}).get('level','なし')} / 明後日:{jma_prob.get('明後日',{}).get('level','なし')}
-【注意報】{'あり ⚠️' if warnings else 'なし ✅'}
-【運航情報】{ferry_status[:60] if ferry_status else '未確認（8時以降に再確認）'}
-
-"""
-        send_slack(header + short_message[:1500], emoji="")
+        send_slack(daily_summary + f"\n【運航情報】{ferry_status[:60] if ferry_status else '未確認'}\n\n" + short_message[:1200], emoji="")
         print("  ✅ 短期アラート送信完了")
     else:
-        print("\n[4] 短期: 問題なし（通知スキップ）")
-        send_slack(f"✅ {now.strftime('%m/%d')} 座間味フェリー：短期予報に問題なし（波高{today_data['max_wave'] if today_data else '?'}m / 気象庁:{jma_waves.get('今日','?')}）", emoji="")
+        print("\n[4] 短期: リスクなし → デイリーサマリー送信")
+        send_slack(daily_summary, emoji="")
 
     # ---- 長期アラート ----
     print("\n[5] 長期予報チェック中（3〜7日先）...")
