@@ -763,22 +763,23 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
         print("\n[P5] SNS投稿中...")
 
         # X: 日本語版を抽出して投稿
-        if "【日本語】" in post_text:
-            ja_text = post_text.split("【日本語】")[1].split("【English】")[0].strip()
-        else:
-            ja_text = post_text[:280]
+        if post_text:
+            if "【日本語】" in post_text:
+                ja_text = post_text.split("【日本語】")[1].split("【English】")[0].strip()
+            else:
+                ja_text = post_text[:280]
 
-        x_configured = all([
-            os.environ.get("X_API_KEY"),
-            os.environ.get("X_API_SECRET"),
-            os.environ.get("X_ACCESS_TOKEN"),
-            os.environ.get("X_ACCESS_SECRET"),
-        ])
+            x_configured = all([
+                os.environ.get("X_API_KEY"),
+                os.environ.get("X_API_SECRET"),
+                os.environ.get("X_ACCESS_TOKEN"),
+                os.environ.get("X_ACCESS_SECRET"),
+            ])
 
-        if x_configured:
-            post_to_x(ja_text)
-        else:
-            print("  [スキップ] X API未設定")
+            if x_configured:
+                post_to_x(ja_text)
+            else:
+                print("  [スキップ] X API未設定")
 
         post_to_instagram(list(image_paths.values()), ig_caption or "")
     else:
