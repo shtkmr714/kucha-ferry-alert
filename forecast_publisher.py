@@ -514,13 +514,18 @@ def generate_instagram_caption(forecast):
 
 def save_to_sheets(forecast, analysis):
     """予測データをGoogle Sheetsに保存"""
-    import gspread
-    from google.oauth2.service_account import Credentials
     sheets_id = os.environ.get("GOOGLE_SHEETS_ID")
     service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 
     if not sheets_id or not service_account_json:
         print("  [スキップ] Google Sheets未設定")
+        return
+
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        print("  [スキップ] gspread未インストール")
         return
 
     try:
@@ -619,7 +624,9 @@ def upload_image_to_github(image_path, filename):
 
     resp = requests.put(api_url, json=data, headers=headers)
     if resp.status_code in (200, 201):
-        return f"https://raw.githubusercontent.com/{repo}/main/{target_path}"
+        owner = repo.split("/")[0]
+        repo_name = repo.split("/")[1]
+        return f"https://{owner}.github.io/{repo_name}/{target_path}"
     raise Exception(f"GitHub upload failed: {resp.status_code} {resp.text[:200]}")
 
 
@@ -722,14 +729,27 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
 
     # 3. 投稿文生成
     print("\n[P3] 投稿文生成中...")
+    short = forecast["short_term"]
+    lt = forecast["long_term"]
+    fallback_caption = (
+        f"🌊 フェリー欠航予報 {forecast['generated_at_label']}\n"
+        f"明日 高速船{short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%\n"
+        f"明後日 高速船{short[1]['highspeed_pct']}% / フェリー{short[1]['ferry_pct']}%\n"
+        f"長期: {lt['risk_period']} 最大{lt['max_pct']}%\n"
+        f"⚠️ AI予測・参考値 / 公式: vill.zamami.okinawa.jp\n"
+        f"#座間味島 #フェリー #沖縄離島 #ZamamiIsland #OkinawaFerry"
+    )
     try:
         post_text = generate_post_text(forecast)
         print("  X投稿文生成完了")
         ig_caption = generate_instagram_caption(forecast)
         print("  Instagramキャプション生成完了")
     except Exception as e:
-        print(f"  [エラー] 投稿文生成失敗: {e}")
-        post_text = ig_caption = None
+        print(f"  [エラー] 投稿文生成失敗（フォールバック使用）: {e}")
+        post_text = None
+        ig_caption = None
+
+    ig_caption = ig_caption or fallback_caption
 
     # 4. DB保存
     print("\n[P4] DB保存中...")
@@ -743,23 +763,22 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
         print("\n[P5] SNS投稿中...")
 
         # X: 日本語版を抽出して投稿
-        if post_text:
-            if "【日本語】" in post_text:
-                ja_text = post_text.split("【日本語】")[1].split("【English】")[0].strip()
-            else:
-                ja_text = post_text[:280]
+        if "【日本語】" in post_text:
+            ja_text = post_text.split("【日本語】")[1].split("【English】")[0].strip()
+        else:
+            ja_text = post_text[:280]
 
-            x_configured = all([
-                os.environ.get("X_API_KEY"),
-                os.environ.get("X_API_SECRET"),
-                os.environ.get("X_ACCESS_TOKEN"),
-                os.environ.get("X_ACCESS_SECRET"),
-            ])
-    
-            if x_configured:
-                post_to_x(ja_text)
-            else:
-                print("  [スキップ] X API未設定")
+        x_configured = all([
+            os.environ.get("X_API_KEY"),
+            os.environ.get("X_API_SECRET"),
+            os.environ.get("X_ACCESS_TOKEN"),
+            os.environ.get("X_ACCESS_SECRET"),
+        ])
+
+        if x_configured:
+            post_to_x(ja_text)
+        else:
+            print("  [スキップ] X API未設定")
 
         post_to_instagram(list(image_paths.values()), ig_caption or "")
     else:
