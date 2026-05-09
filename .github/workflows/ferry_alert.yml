@@ -2,8 +2,8 @@ name: Kucha Ferry Alert
 
 on:
   schedule:
-    - cron: '0 22 * * *'
     - cron: '15 23 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
@@ -37,5 +37,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+          IMGUR_CLIENT_ID: ${{ secrets.IMGUR_CLIENT_ID }}
         run: |
           python ferry_alert.py
