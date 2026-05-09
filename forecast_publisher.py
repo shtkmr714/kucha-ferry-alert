@@ -10,13 +10,11 @@ Okinawa Ferry Forecast Publisher
 import os
 import json
 import math
-import gspread
 import textwrap
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont
 from anthropic import Anthropic
-from google.oauth2.service_account import Credentials
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -516,6 +514,8 @@ def generate_instagram_caption(forecast):
 
 def save_to_sheets(forecast, analysis):
     """予測データをGoogle Sheetsに保存"""
+    import gspread
+    from google.oauth2.service_account import Credentials
     sheets_id = os.environ.get("GOOGLE_SHEETS_ID")
     service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 
