@@ -651,6 +651,11 @@ def post_to_instagram(image_paths, caption):
             image_urls.append(raw_url)
             print(f"    {raw_url}")
 
+        # GitHub Pages のビルド完了を待つ（通常30〜90秒）
+        import time
+        print("  [Instagram] GitHub Pages ビルド待機中（90秒）...")
+        time.sleep(90)
+
         # Step2: 各画像のカルーセルアイテムコンテナを作成
         media_ids = []
         for img_url in image_urls:
