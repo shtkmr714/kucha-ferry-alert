@@ -645,6 +645,14 @@ def run_ferry_check():
     except Exception as e:
         print(f"  [エラー] 長期予報生成失敗: {e}")
 
+    # 画像生成・SNS投稿
+    print("\n[6] Publisher実行中...")
+    try:
+        from forecast_publisher import run_publisher
+        run_publisher(analysis, jma_waves, jma_prob)
+    except Exception as e:
+        print(f"  [警告] Publisher実行エラー: {e}")
+
     print("\n処理完了。")
 
 
