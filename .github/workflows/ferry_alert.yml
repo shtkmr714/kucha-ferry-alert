@@ -34,7 +34,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install requests anthropic beautifulsoup4 lxml python-dotenv
+          pip install requests anthropic beautifulsoup4 lxml python-dotenv Pillow
       
       - name: Run Ferry Alert Check
         env:
