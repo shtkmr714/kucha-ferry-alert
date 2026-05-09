@@ -733,10 +733,13 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
 
     # 4. DB保存
     print("\n[P4] DB保存中...")
-    save_to_sheets(forecast, analysis)
+    try:
+        save_to_sheets(forecast, analysis)
+    except Exception as e:
+        print(f"  [警告] DB保存エラー: {e}")
 
     # 5. SNS投稿
-    if post_to_social and post_text:
+    if post_to_social:
         print("\n[P5] SNS投稿中...")
 
         # X: 日本語版を抽出して投稿
