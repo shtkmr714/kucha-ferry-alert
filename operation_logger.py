@@ -57,8 +57,8 @@ def get_zamami_operation_status():
     }
 
     try:
-        # 運航情報専用ページを取得
-        SHIP_URL = "https://www.vill.zamami.okinawa.jp/info/ship.html"
+        # 運航情報はトップページに掲載（ship.htmlは存在しない）
+        SHIP_URL = "https://www.vill.zamami.okinawa.jp/"
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(SHIP_URL, headers=headers, timeout=15)
         resp.encoding = "utf-8"
