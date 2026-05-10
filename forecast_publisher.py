@@ -826,6 +826,10 @@ def post_to_instagram(image_paths, caption):
         carousel_id = data["id"]
         print(f"  カルーセルコンテナ: {carousel_id}")
 
+        # カルーセルコンテナの処理完了を待つ
+        print("  [Instagram] カルーセル処理待機中（30秒）...")
+        time.sleep(30)
+
         # Step4: 投稿を公開
         resp = requests.post(
             f"https://graph.facebook.com/v25.0/{user_id}/media_publish",
