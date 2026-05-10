@@ -22,10 +22,63 @@ JST = ZoneInfo("Asia/Tokyo")
 # 設定
 # ============================================================
 
-# フォントパス
-FONT_REGULAR = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-FONT_BOLD    = "/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc"
-FONT_MEDIUM  = "/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc"
+# フォントパス（動的検索）
+def _find_noto_font(weights):
+    """NotoSansCJKフォントを複数候補パスから検索。見つかったパスを返す。"""
+    search_dirs = [
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/noto-cjk",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/noto",
+        "/usr/local/share/fonts/noto",
+        "/usr/share/fonts/opentype",
+        "/usr/share/fonts/truetype",
+    ]
+    for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
+        for w in weights:
+            for ext in [".ttc", ".otf", ".ttf"]:
+                p = os.path.join(d, f"NotoSansCJK-{w}{ext}")
+                if os.path.exists(p):
+                    return p
+    # fc-list でフォールバック検索
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["fc-list", ":lang=ja", "--format=%{file}\n"],
+            text=True, timeout=5, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            line = line.strip()
+            if line and "Noto" in line and "Sans" in line:
+                return line
+    except Exception:
+        pass
+    return None
+
+FONT_REGULAR = _find_noto_font(["Regular"])
+FONT_BOLD    = _find_noto_font(["Black", "Bold"])
+FONT_MEDIUM  = _find_noto_font(["Medium", "Regular"])
+
+# 起動時にフォント検索結果を表示
+print(f"[Font] REGULAR: {FONT_REGULAR}")
+print(f"[Font] BOLD:    {FONT_BOLD}")
+print(f"[Font] MEDIUM:  {FONT_MEDIUM}")
+
+
+def _load_font(path, size):
+    """フォントを個別にロード。失敗時はサイズ指定のデフォルトフォントを返す。"""
+    if path:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            pass
+    # Pillow 10+ はsize指定可、それ以前は引数なし
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 # 画像サイズ
 IMG_SIZE = (1080, 1080)
@@ -205,20 +258,17 @@ def make_image_header(forecast, output_path):
     """画像①: ヘッダー（日英併記・3島名）"""
     img = Image.new("RGB", IMG_SIZE, color=hex_to_rgb("#0D47A1"))
     draw = ImageDraw.Draw(img)
-    try:
-        f = {
-            "islands_ja": ImageFont.truetype(FONT_BOLD, 62),
-            "islands_en": ImageFont.truetype(FONT_MEDIUM, 32),
-            "area":       ImageFont.truetype(FONT_REGULAR, 28),
-            "service_ja": ImageFont.truetype(FONT_MEDIUM, 48),
-            "service_en": ImageFont.truetype(FONT_REGULAR, 30),
-            "date":       ImageFont.truetype(FONT_BOLD, 48),
-            "update":     ImageFont.truetype(FONT_REGULAR, 28),
-            "url":        ImageFont.truetype(FONT_REGULAR, 24),
-            "xs":         ImageFont.truetype(FONT_REGULAR, 19),
-        }
-    except Exception:
-        f = {k: ImageFont.load_default() for k in ["islands_ja","islands_en","area","service_ja","service_en","date","update","url","xs"]}
+    f = {
+        "islands_ja": _load_font(FONT_BOLD,    62),
+        "islands_en": _load_font(FONT_MEDIUM,  32),
+        "area":       _load_font(FONT_REGULAR, 28),
+        "service_ja": _load_font(FONT_MEDIUM,  48),
+        "service_en": _load_font(FONT_REGULAR, 30),
+        "date":       _load_font(FONT_BOLD,    48),
+        "update":     _load_font(FONT_REGULAR, 28),
+        "url":        _load_font(FONT_REGULAR, 24),
+        "xs":         _load_font(FONT_REGULAR, 19),
+    }
 
     now = datetime.now(JST)
 
@@ -261,21 +311,18 @@ def make_image_short(forecast, output_path):
     max_pct = max(d["highspeed_pct"] for d in short)
     img = Image.new("RGB", IMG_SIZE, color=hex_to_rgb(get_bg_color(max_pct)))
     draw = ImageDraw.Draw(img)
-    try:
-        f = {
-            "title_ja": ImageFont.truetype(FONT_BOLD, 46),
-            "title_en": ImageFont.truetype(FONT_MEDIUM, 28),
-            "island":   ImageFont.truetype(FONT_REGULAR, 24),
-            "date":     ImageFont.truetype(FONT_MEDIUM, 34),
-            "date_en":  ImageFont.truetype(FONT_REGULAR, 26),
-            "pct":      ImageFont.truetype(FONT_BOLD, 90),
-            "type_ja":  ImageFont.truetype(FONT_MEDIUM, 30),
-            "ampm":     ImageFont.truetype(FONT_REGULAR, 24),
-            "jma":      ImageFont.truetype(FONT_REGULAR, 19),
-            "xs":       ImageFont.truetype(FONT_REGULAR, 18),
-        }
-    except Exception:
-        f = {k: ImageFont.load_default() for k in ["title_ja","title_en","island","date","date_en","pct","type_ja","ampm","jma","xs"]}
+    f = {
+        "title_ja": _load_font(FONT_BOLD,    46),
+        "title_en": _load_font(FONT_MEDIUM,  28),
+        "island":   _load_font(FONT_REGULAR, 24),
+        "date":     _load_font(FONT_MEDIUM,  34),
+        "date_en":  _load_font(FONT_REGULAR, 26),
+        "pct":      _load_font(FONT_BOLD,    90),
+        "type_ja":  _load_font(FONT_MEDIUM,  30),
+        "ampm":     _load_font(FONT_REGULAR, 24),
+        "jma":      _load_font(FONT_REGULAR, 19),
+        "xs":       _load_font(FONT_REGULAR, 18),
+    }
 
     draw.text((540, 48), "フェリー欠航可能性 短期予報", font=f["title_ja"], fill="white", anchor="mm")
     draw.text((540, 90), "Ferry Cancellation Risk  /  Short-term Forecast", font=f["title_en"], fill="rgba(255,255,255,200)", anchor="mm")
@@ -321,23 +368,20 @@ def make_image_longterm(forecast, output_path):
     max_pct = lt["max_pct"]
     img = Image.new("RGB", IMG_SIZE, color=hex_to_rgb(get_bg_color(max_pct)))
     draw = ImageDraw.Draw(img)
-    try:
-        f = {
-            "title_ja": ImageFont.truetype(FONT_BOLD, 44),
-            "title_en": ImageFont.truetype(FONT_MEDIUM, 26),
-            "island":   ImageFont.truetype(FONT_REGULAR, 22),
-            "head":     ImageFont.truetype(FONT_MEDIUM, 32),
-            "head_en":  ImageFont.truetype(FONT_REGULAR, 24),
-            "period":   ImageFont.truetype(FONT_BOLD, 64),
-            "pct":      ImageFont.truetype(FONT_BOLD, 76),
-            "label":    ImageFont.truetype(FONT_MEDIUM, 28),
-            "label_en": ImageFont.truetype(FONT_REGULAR, 22),
-            "col_hd":   ImageFont.truetype(FONT_MEDIUM, 22),
-            "bar":      ImageFont.truetype(FONT_REGULAR, 21),
-            "xs":       ImageFont.truetype(FONT_REGULAR, 17),
-        }
-    except Exception:
-        f = {k: ImageFont.load_default() for k in ["title_ja","title_en","island","head","head_en","period","pct","label","label_en","col_hd","bar","xs"]}
+    f = {
+        "title_ja": _load_font(FONT_BOLD,    44),
+        "title_en": _load_font(FONT_MEDIUM,  26),
+        "island":   _load_font(FONT_REGULAR, 22),
+        "head":     _load_font(FONT_MEDIUM,  32),
+        "head_en":  _load_font(FONT_REGULAR, 24),
+        "period":   _load_font(FONT_BOLD,    64),
+        "pct":      _load_font(FONT_BOLD,    76),
+        "label":    _load_font(FONT_MEDIUM,  28),
+        "label_en": _load_font(FONT_REGULAR, 22),
+        "col_hd":   _load_font(FONT_MEDIUM,  22),
+        "bar":      _load_font(FONT_REGULAR, 21),
+        "xs":       _load_font(FONT_REGULAR, 17),
+    }
 
     # タイトル
     draw.text((540, 46), "フェリー欠航可能性 長期予報（3〜7日先）", font=f["title_ja"], fill="white", anchor="mm")
