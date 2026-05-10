@@ -190,6 +190,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
         short_term.append({
             "date": date,
             "date_label": date_label,
+            "date_label_en": dt.strftime("%b %-d"),  # 例: May 11
             "label_ja": label,
             "label_en": label_en,
             "highspeed_pct": hs_pct,
@@ -199,6 +200,8 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
             "jma_wave": jma_waves.get(label, ""),
             "jma_prob": jma_prob.get(label, {}).get("level", ""),
             "max_wave": all_day["max_wave"] if all_day else None,
+            "max_wind": all_day.get("max_wind", "") if all_day else "",
+            "max_swell": all_day.get("max_swell", "") if all_day else "",
         })
 
     long_term = []
@@ -234,19 +237,43 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
         }
     else:
         max_lt_pct = max((d["highspeed_pct"] for d in long_term), default=0)
+        # 長期期間の英語表記（懸念なし時も先頭〜末尾の日付を使う）
+        if long_term:
+            lt_start = datetime.strptime(long_term[0]["date"], "%Y-%m-%d")
+            lt_end   = datetime.strptime(long_term[-1]["date"], "%Y-%m-%d")
+            lt_period_en = f"{lt_start.strftime('%b %-d')} - {lt_end.strftime('%b %-d')}"
+        else:
+            lt_period_en = ""
         long_term_summary = {
             "has_risk": False,
             "risk_period": "懸念なし",
             "risk_period_en": "No concern",
+            "lt_period_en": lt_period_en,
             "max_pct": max_lt_pct,
             "days": long_term,
         }
 
+    # 明日の数値予測データを weather_data としてまとめる
+    tmr = short_term[0] if short_term else {}
+    daf = short_term[1] if len(short_term) > 1 else {}
+    weather_data = {
+        "jma_wave_tomorrow":    jma_waves.get("明日", ""),
+        "jma_wave_dayafter":    jma_waves.get("明後日", ""),
+        "jma_prob_tomorrow":    jma_prob.get("明日", {}).get("level", "なし"),
+        "jma_prob_dayafter":    jma_prob.get("明後日", {}).get("level", "なし"),
+        "num_max_wave":  f"{tmr.get('max_wave', '')}m" if tmr.get("max_wave") else "",
+        "num_max_swell": f"{tmr.get('max_swell', '')}m" if tmr.get("max_swell") else "",
+        "num_max_wind":  f"{tmr.get('max_wind', '')} m/s" if tmr.get("max_wind") else "",
+    }
+
     return {
         "short_term": short_term,
         "long_term": long_term_summary,
+        "weather_data": weather_data,
         "generated_at": now.strftime("%Y/%m/%d %H:%M"),
         "generated_at_label": "8:15更新" if now.hour < 11 else "13:00更新",
+        "update_date_ja": now.strftime("%-m/%-d"),
+        "update_date_en": now.strftime("%b %-d"),
     }
 
 
@@ -333,9 +360,9 @@ def make_image_short(forecast, output_path):
     for i, day in enumerate(short[:2]):
         x = positions[i]
 
-        # 日付（明日 5/9 + Tomorrow）
+        # 日付（明日 5/11 + Tomorrow May 11）
         draw.text((x, 175), f"{day['label_ja']}  {day['date_label']}", font=f["date"], fill="white", anchor="mm")
-        draw.text((x, 210), day["label_en"], font=f["date_en"], fill="rgba(255,255,255,180)", anchor="mm")
+        draw.text((x, 215), f"{day['label_en']}  {day.get('date_label_en', '')}", font=f["date_en"], fill="rgba(255,255,255,180)", anchor="mm")
 
         # 高速船（High Speed Boat）
         draw.text((x, 320), f"{day['highspeed_pct']}%", font=f["pct"], fill="white", anchor="mm")
@@ -415,8 +442,8 @@ def make_image_longterm(forecast, output_path):
     draw.line([(80,530),(1000,530)], fill="rgba(255,255,255,70)", width=1)
     draw.text((290, 552), "高速船  High Speed Boat", font=f["col_hd"], fill="white", anchor="mm")
     draw.text((790, 552), "フェリー  Ferry", font=f["col_hd"], fill="white", anchor="mm")
-    draw.line([(540,535),(540,1030)], fill="rgba(255,255,255,50)", width=1)
 
+    FOOTER_LINE_Y = 960  # フッター区切り線Y座標（縦線はここで止める）
     bar_top, bar_h, row_sp = 580, 28, 72
     cols = [
         {"date_x": 155, "bar_x": 175, "bar_max": 270, "pct_x": 455, "key": "highspeed_pct"},
@@ -435,7 +462,9 @@ def make_image_longterm(forecast, output_path):
                 draw.rectangle([(col["bar_x"], y),(col["bar_x"]+bar_w, y+bar_h)], fill=(255,255,255,210))
             draw.text((col["pct_x"], y + bar_h//2), f"{pct}%", font=f["bar"], fill="white", anchor="lm")
 
-    draw.line([(80,960),(1000,960)], fill="rgba(255,255,255,40)", width=1)
+    # 縦区切り線：フッター区切り線で止める
+    draw.line([(540, 535),(540, FOOTER_LINE_Y)], fill="rgba(255,255,255,50)", width=1)
+    draw.line([(80, FOOTER_LINE_Y),(1000, FOOTER_LINE_Y)], fill="rgba(255,255,255,40)", width=1)
     draw.text((540, 985), "※AI予測・参考値。公式情報は座間味村HPをご確認ください。", font=f["xs"], fill="rgba(255,255,255,140)", anchor="mm")
     draw.text((540, 1006), "*AI-based estimate. Check official Zamami Village website.", font=f["xs"], fill="rgba(255,255,255,120)", anchor="mm")
 
@@ -443,22 +472,88 @@ def make_image_longterm(forecast, output_path):
     print(f"  画像③保存: {output_path}")
 
 
+def make_image_weather_data(forecast, output_path):
+    """画像④: 予報根拠データ（日英併記）"""
+    wd = forecast.get("weather_data", {})
+    img = Image.new("RGB", IMG_SIZE, color=hex_to_rgb("#0A1628"))
+    draw = ImageDraw.Draw(img)
+
+    f = {
+        "title":    _load_font(FONT_BOLD,    40),
+        "sec_hd":   _load_font(FONT_BOLD,    22),
+        "label_ja": _load_font(FONT_REGULAR, 20),
+        "label_en": _load_font(FONT_REGULAR, 17),
+        "value":    _load_font(FONT_MEDIUM,  20),
+        "src":      _load_font(FONT_REGULAR, 19),
+        "foot":     _load_font(FONT_REGULAR, 17),
+    }
+
+    # タイトル
+    draw.text((540, 68), "予報根拠データ  /  Forecast Data", font=f["title"], fill="white", anchor="mm")
+    draw.line([(60, 100),(1020, 100)], fill="#334E7A", width=2)
+
+    def section_header(y, ja, en):
+        draw.rectangle([(60, y),(1020, y+44)], fill="#1A3057")
+        draw.text((80, y+22), f"【{ja} / {en}】", font=f["sec_hd"], fill="#7EB3F5", anchor="lm")
+        return y + 60
+
+    def row(y, icon, label_ja, label_en, value):
+        draw.text((80,  y),    f"{icon} {label_ja}", font=f["label_ja"], fill="#BBDEFB", anchor="lm")
+        draw.text((96,  y+24), label_en,              font=f["label_en"], fill="#7986CB", anchor="lm")
+        draw.text((1010, y+12), str(value),            font=f["value"],    fill="white",   anchor="rm")
+        return y + 58
+
+    # 【気象庁 / JMA】
+    y = section_header(118, "気象庁", "JMA")
+    y = row(y, "🌊", "波高予報（明日）",          "Wave Height Forecast (Tomorrow)",   wd.get("jma_wave_tomorrow", "—"))
+    y = row(y, "🌊", "波高予報（明後日）",         "Wave Height Forecast (Day After)",  wd.get("jma_wave_dayafter", "—"))
+    y = row(y, "⚠", "早期注意情報・波浪（明日）",  "Early Warning Wave (Tomorrow)",     wd.get("jma_prob_tomorrow", "なし / None"))
+    y = row(y, "⚠", "早期注意情報・波浪（明後日）", "Early Warning Wave (Day After)",    wd.get("jma_prob_dayafter", "なし / None"))
+
+    y += 12
+    # 【数値予測 / Numerical Model】
+    y = section_header(y, "数値予測", "Numerical Model")
+    y = row(y, "📊", "明日 最大波高",  "Tomorrow Max Wave Height",  wd.get("num_max_wave",  "—"))
+    y = row(y, "📊", "明日 最大うねり", "Tomorrow Max Swell Height", wd.get("num_max_swell", "—"))
+    y = row(y, "💨", "明日 最大風速",  "Tomorrow Max Wind Speed",   wd.get("num_max_wind",  "—"))
+
+    y += 12
+    # 【情報源 / Sources】
+    y = section_header(y, "情報源", "Sources")
+    draw.text((80, y),    "気象庁（jma.go.jp）  /  Open-Meteo Marine API",   font=f["src"], fill="#BBDEFB", anchor="lm")
+    draw.text((80, y+30), "座間味村HP（vill.zamami.okinawa.jp）",             font=f["src"], fill="#BBDEFB", anchor="lm")
+    draw.text((80, y+60), "Zamami Village official site / JMA (jma.go.jp)", font=f["src"], fill="#7986CB", anchor="lm")
+
+    # フッター
+    draw.line([(60, 1020),(1020, 1020)], fill="#334E7A", width=1)
+    draw.text((540, 1044), "※欠航判断は船会社・座間味村が行います。本データはAI予測の参考値です。",
+              font=f["foot"], fill="#546E7A", anchor="mm")
+    draw.text((540, 1066), "*Cancellation is determined by ferry operators. AI-based estimates for reference only.",
+              font=f["foot"], fill="#455A64", anchor="mm")
+
+    img.save(output_path)
+    print(f"  画像④保存: {output_path}")
+
+
 def generate_images(forecast, output_dir="/tmp/ferry_images"):
-    """3枚の画像を生成してパスのリストを返す"""
+    """4枚の画像を生成してパスのリストを返す"""
     os.makedirs(output_dir, exist_ok=True)
     now = datetime.now(JST)
     ts = now.strftime("%Y%m%d_%H%M")
 
     paths = {
-        "header":    f"{output_dir}/img1_header_{ts}.png",
-        "short":     f"{output_dir}/img2_short_{ts}.png",
-        "longterm":  f"{output_dir}/img3_longterm_{ts}.png",
+        "header":      f"{output_dir}/img1_header_{ts}.png",
+        "short":       f"{output_dir}/img2_short_{ts}.png",
+        "longterm":    f"{output_dir}/img3_longterm_{ts}.png",
+        "weatherdata": f"{output_dir}/img4_weatherdata_{ts}.png",
     }
 
     make_image_header(forecast, paths["header"])
     make_image_short(forecast, paths["short"])
     make_image_longterm(forecast, paths["longterm"])
+    make_image_weather_data(forecast, paths["weatherdata"])
 
+    print(f"  画像4枚生成成功!")
     return paths
 
 
@@ -780,13 +875,47 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
     print("\n[P3] 投稿文生成中...")
     short = forecast["short_term"]
     lt = forecast["long_term"]
+
+    # 長期期間の表記
+    if lt["has_risk"]:
+        lt_period_ja = lt["risk_period"]
+        lt_period_en = lt["risk_period_en"]
+    else:
+        lt_start_en = lt.get("lt_period_en", "")
+        lt_period_ja = f"{short[0].get('date_label', '')[:-2] if short else ''}13〜17"  # fallback
+        # 長期日付を days から取得
+        if lt.get("days"):
+            import datetime as _dt
+            d0 = _dt.datetime.strptime(lt["days"][0]["date"], "%Y-%m-%d")
+            d1 = _dt.datetime.strptime(lt["days"][-1]["date"], "%Y-%m-%d")
+            lt_period_ja = f"{d0.strftime('%-m/%-d')}〜{d1.strftime('%-m/%-d')}"
+            lt_period_en = f"{d0.strftime('%b %-d')} - {d1.strftime('%b %-d')}"
+        else:
+            lt_period_en = lt.get("lt_period_en", "")
+
     fallback_caption = (
-        f"🌊 フェリー欠航予報 {forecast['generated_at_label']}\n"
-        f"明日 高速船{short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%\n"
-        f"明後日 高速船{short[1]['highspeed_pct']}% / フェリー{short[1]['ferry_pct']}%\n"
-        f"長期: {lt['risk_period']} 最大{lt['max_pct']}%\n"
-        f"⚠️ AI予測・参考値 / 公式: vill.zamami.okinawa.jp\n"
-        f"#座間味島 #フェリー #沖縄離島 #ZamamiIsland #OkinawaFerry"
+        f"{forecast['update_date_en']} {forecast['generated_at_label']}\n"
+        f"座間味島・阿嘉島・慶留間島 フェリー欠航予報\n"
+        f"\n"
+        f"■船舶欠航可能性\n"
+        f"明日 {short[0]['date_label']}  高速船 {short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%\n"
+        f"明後日 {short[1]['date_label']} 高速船{short[1]['highspeed_pct']}% / フェリー{short[1]['ferry_pct']}%\n"
+        f"長期（{lt_period_ja}）: {lt['risk_period'] if lt['has_risk'] else '懸念なし'} 最大{lt['max_pct']}%\n"
+        f"⚠️ AI予測・参考値です。公式情報は座間味村HPを参照ください。\n"
+        f"#座間味島 #阿嘉島 #慶留間島 #フェリー #沖縄離島\n"
+        f"\n"
+        f"\n"
+        f"{forecast['update_date_en']} updated\n"
+        f"Kerama Islands (Zamami, Aka, Geruma) Ferry Cancellation Forecast\n"
+        f"\n"
+        f"■Boat/Ferry Cancellation Risk\n"
+        f"Tomorrow ({short[0].get('date_label_en', '')}) High-Speed Boat {short[0]['highspeed_pct']}% / Ferry {short[0]['ferry_pct']}%\n"
+        f"Day After ({short[1].get('date_label_en', '')}) High-Speed Boat {short[1]['highspeed_pct']}% / Ferry {short[1]['ferry_pct']}%\n"
+        f"Long-term ({lt_period_en}): {'No significant Risk' if not lt['has_risk'] else lt['risk_period_en']}, max.{lt['max_pct']}%\n"
+        f"⚠️ AI-based estimate, for reference only\n"
+        f"Check the official Zamami Village Website for confirmed info\n"
+        f"\n"
+        f"#KeramaIslands #ZamamiIsland #OkinawaFerry"
     )
     try:
         post_text = generate_post_text(forecast)
