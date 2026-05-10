@@ -898,7 +898,7 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
             lt_period_en = lt.get("lt_period_en", "")
 
     fallback_caption = (
-        f"{forecast['update_date_en']} {forecast['generated_at_label']}\n"
+        f"{forecast['update_date_ja']} {forecast['generated_at_label']}\n"
         f"座間味島・阿嘉島・慶留間島 フェリー欠航予報\n"
         f"\n"
         f"■船舶欠航可能性\n"
