@@ -57,138 +57,94 @@ def get_zamami_operation_status():
     }
 
     try:
-        # 運航情報はトップページに掲載（ship.htmlは存在しない）
-        SHIP_URL = "https://www.vill.zamami.okinawa.jp/"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(SHIP_URL, headers=headers, timeout=15)
-        resp.encoding = "utf-8"
-        soup = BeautifulSoup(resp.text, "lxml")
+        resp = requests.get("https://www.vill.zamami.okinawa.jp/",
+                            headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        soup = BeautifulSoup(resp.content.decode("utf-8", errors="replace"), "lxml")
 
-        # ページ全体のテキストを行単位で取得
-        text_content = soup.get_text(separator="\n", strip=True)
-        lines = text_content.split("\n")
+        # ============================================================
+        # announcement_text / weather_desc
+        # div.un_homeFerryInfo_head に当日の概況テキストがある
+        # ============================================================
+        head_div = soup.find(class_="un_homeFerryInfo_head")
+        head_text = head_div.get_text(" ", strip=True) if head_div else ""
+        result["announcement_text"] = head_text[:500]
 
-        # 今日の日付パターンで該当行を特定し、以降の運航情報を抽出
-        today = datetime.now(JST)
-        date_patterns = [
-            today.strftime("%Y年%m月%d日"),
-            today.strftime("%-m月%-d日"),
-            today.strftime("%m月%d日"),
-        ]
-
-        op_lines = []
-        capture = False
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if any(p in line for p in date_patterns):
-                capture = True
-            if capture:
-                op_lines.append(line)
-            if capture and len(op_lines) > 30:
-                break
-
-        # 日付が見つからない場合は運航関連キーワードで抽出
-        if not op_lines:
-            op_keywords = ["フェリーざまみ", "クィーンざまみ", "クイーンざまみ",
-                           "欠航", "条件付き", "折り返し", "運航情報", "通常運航"]
-            op_lines = [l.strip() for l in lines if any(k in l for k in op_keywords)][:20]
-
-        full_text = " ".join(op_lines)
-        result["announcement_text"] = full_text[:500]
-
-        # 天気記述を抽出（「くもり後雨」等）
-        weather_match = re.search(r"(晴れ?|くもり|雨|霧|台風)[^\s。、]{0,15}", full_text)
+        weather_match = re.search(r"(晴れ?|くもり|雨|霧|台風)[^\s。、]{0,10}", head_text)
         if weather_match:
             result["weather_desc"] = weather_match.group(0)
 
-        # ---- フェリーざまみ の状態判定 ----
-        # full_text 全体から「フェリーざまみ」を含む文を探す
-        ferry_text = ""
-        for line in op_lines:
-            if "フェリーざまみ" in line or "フェリー" in line:
-                ferry_text += " " + line
-        ferry_text = ferry_text.strip()
-
-        # フォールバック：ページ全体から探す
-        if not ferry_text:
-            for line in lines:
-                if "フェリーざまみ" in line:
-                    ferry_text += " " + line.strip()
-
-        if ferry_text:
-            if "欠航" in ferry_text:
-                result["ferry_operated"] = 0
-                if any(w in ferry_text for w in ["機器", "エンジン", "トラブル", "故障", "点検", "整備", "ドック"]):
-                    result["ferry_cancel_reason"] = "equipment"
-                elif "ドック" in ferry_text:
-                    result["ferry_cancel_reason"] = "dock"
-                else:
-                    result["ferry_cancel_reason"] = "weather"
-            elif "折り返し" in ferry_text:
-                result["ferry_operated"] = 1
-                result["ferry_turnaround"] = 1
-                result["ferry_cancel_reason"] = "none"
+        # ============================================================
+        # 欠航理由はannouncement_textから判定（構造データにはない）
+        # ============================================================
+        def _cancel_reason(text):
+            if any(w in text for w in ["機器", "エンジン", "トラブル", "故障", "点検", "整備"]):
+                return "equipment"
+            elif "ドック" in text:
+                return "dock"
             else:
-                result["ferry_operated"] = 1
-                result["ferry_cancel_reason"] = "none"
+                return "weather"
 
-        # ---- クィーンざまみ（高速船）の状態判定 ----
-        hs_text = ""
-        for line in op_lines:
-            if "クィーンざまみ" in line or "クイーンざまみ" in line or "高速船" in line:
-                hs_text += " " + line
+        # ============================================================
+        # 船ごとの運航判定（CSSクラス構造を直接使用）
+        #
+        # div.un_homeFerryInfo_route
+        #   h3.un_homeFerryInfo_heading02        ← 船名
+        #   div.bl_routeSchedule
+        #     div.bl_routeSchedule_suspension    ← 欠航（存在すれば欠航確定）
+        #     div.bl_routeSchedule_row           ← 運航便（便ごとに1要素）
+        #       div.bl_routeSchedule_num         ← 「第1便」「第2便」など
+        # ============================================================
+        for route_div in soup.find_all(class_="un_homeFerryInfo_route"):
+            heading = route_div.find(class_="un_homeFerryInfo_heading02")
+            if not heading:
+                continue
+            vessel_name = heading.get_text(strip=True)
+            is_suspended = bool(route_div.find(class_="bl_routeSchedule_suspension"))
 
-        # フォールバック：ページ全体から探す
-        if not hs_text:
-            for line in lines:
-                if "クィーンざまみ" in line or "クイーンざまみ" in line:
-                    hs_text += " " + line.strip()
+            # ---- フェリーざまみ ----
+            if "フェリーざまみ" in vessel_name:
+                if is_suspended:
+                    result["ferry_operated"] = 0
+                    result["ferry_cancel_reason"] = _cancel_reason(head_text)
+                else:
+                    result["ferry_operated"] = 1
+                    result["ferry_cancel_reason"] = "none"
+                    if "折り返し" in route_div.get_text():
+                        result["ferry_turnaround"] = 1
 
-        hs_text = hs_text.strip()
-
-        if hs_text:
-            if "欠航" in hs_text:
-                # 全便欠航か便別欠航かを判定
-                if "全便" in hs_text:
+            # ---- クィーンざまみ ----
+            elif "クィーンざまみ" in vessel_name or "クイーンざまみ" in vessel_name:
+                if is_suspended:
                     result["hs_bin1_operated"] = 0
                     result["hs_bin2_operated"] = 0
                     result["hs_bin3_operated"] = 0
+                    result["hs_cancel_reason"] = _cancel_reason(head_text)
                 else:
-                    # 便番号ベースで判定（「1便」「第1便」「１便」に対応）
-                    def _bin_cancelled(text, bin_num):
-                        patterns = [f"{bin_num}便", f"第{bin_num}便", f"第{bin_num}便目"]
-                        return any(p in text for p in patterns) and "欠航" in text
+                    # 運航している便 = bl_routeSchedule_row が存在する便
+                    active_bins = set()
+                    for row in route_div.find_all(class_="bl_routeSchedule_row"):
+                        num_el = row.find(class_="bl_routeSchedule_num")
+                        if num_el:
+                            m = re.search(r'([１２３1-3])', num_el.get_text(strip=True))
+                            if m:
+                                n = str("１２３".index(m.group(1)) + 1) \
+                                    if m.group(1) in "１２３" else m.group(1)
+                                active_bins.add(n)
 
-                    b1 = _bin_cancelled(hs_text, "1") or _bin_cancelled(hs_text, "１")
-                    b2 = _bin_cancelled(hs_text, "2") or _bin_cancelled(hs_text, "２")
-                    b3 = _bin_cancelled(hs_text, "3") or _bin_cancelled(hs_text, "３")
+                    if active_bins:
+                        result["hs_bin1_operated"] = 1 if "1" in active_bins else 0
+                        result["hs_bin2_operated"] = 1 if "2" in active_bins else 0
+                        result["hs_bin3_operated"] = 1 if "3" in active_bins else 0
+                    else:
+                        # rowが取れなかった場合は全便運航と見なす
+                        result["hs_bin1_operated"] = 1
+                        result["hs_bin2_operated"] = 1
+                        result["hs_bin3_operated"] = 1
+                    result["hs_cancel_reason"] = "none"
 
-                    if not b1 and not b2 and not b3:
-                        # 便特定できない場合は全便欠航
-                        b1 = b2 = b3 = True
-
-                    result["hs_bin1_operated"] = 0 if b1 else 1
-                    result["hs_bin2_operated"] = 0 if b2 else 1
-                    result["hs_bin3_operated"] = 0 if b3 else 1
-
-                # 欠航理由
-                if any(w in hs_text for w in ["機器", "エンジン", "トラブル", "故障", "点検", "整備", "ドック"]):
-                    result["hs_cancel_reason"] = "equipment"
-                elif "ドック" in hs_text:
-                    result["hs_cancel_reason"] = "dock"
-                else:
-                    result["hs_cancel_reason"] = "weather"
-            else:
-                result["hs_bin1_operated"] = 1
-                result["hs_bin2_operated"] = 1
-                result["hs_bin3_operated"] = 1
-                result["hs_cancel_reason"] = "none"
-
-        print(f"  [HP] フェリー: {'運航' if result['ferry_operated'] == 1 else ('欠航(' + result['ferry_cancel_reason'] + ')') if result['ferry_operated'] == 0 else '不明'}{'(折り返し)' if result['ferry_turnaround'] else ''}")
+        print(f"  [HP] フェリー: {'運航' if result['ferry_operated']==1 else '欠航('+result['ferry_cancel_reason']+')' if result['ferry_operated']==0 else '不明'}{'(折り返し)' if result['ferry_turnaround'] else ''}")
         print(f"  [HP] 高速船: 1便={result['hs_bin1_operated']} 2便={result['hs_bin2_operated']} 3便={result['hs_bin3_operated']}")
-        print(f"  [HP] 運航文: {result['announcement_text'][:100]}")
+        print(f"  [HP] 天気: {result['weather_desc']}")
 
     except Exception as e:
         print(f"  [警告] 座間味HP取得エラー: {e}")
