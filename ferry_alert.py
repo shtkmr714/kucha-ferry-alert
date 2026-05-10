@@ -580,7 +580,7 @@ def run_ferry_check():
     print(f"  明日: 波高{tomorrow_data['max_wave']}m / スコア{tomorrow_data['cancellation_score']}" if tomorrow_data else "  明日: データなし")
     print(f"  明後日: 波高{day_after_data['max_wave']}m / スコア{day_after_data['cancellation_score']}" if day_after_data else "  明後日: データなし")
 
-    # ---- 共通ヘッダー（毎回必ず送信） ----
+    # ---- 共通ヘルパー ----
     def risk_label(data, morning=None, afternoon=None):
         if not data:
             return "データなし"
@@ -594,7 +594,35 @@ def run_ferry_check():
         time_detail = f" [{am} / {pm}]" if am and pm else ""
         return f"波{data['max_wave']}m うねり{data.get('max_swell','?')}m 風{data.get('max_wind','?')}m/s → {risk}{time_detail}"
 
-    daily_summary = f"""[{now.strftime('%m/%d')}] Kucha フェリー予報
+    # ---- 短期リスク判定 ----
+    short_risk = (
+        (tomorrow_data and (tomorrow_data["risk_highspeed"] or tomorrow_data["risk_ferry"])) or
+        (day_after_data and (day_after_data["risk_highspeed"] or day_after_data["risk_ferry"])) or
+        len(warnings) > 0 or
+        prob_risk
+    )
+
+    # ---- 長期リスク判定（3〜7日先） ----
+    long_risk_days = []
+    for delta in range(3, 8):
+        date = (datetime.now(JST) + timedelta(days=delta)).strftime("%Y-%m-%d")
+        d = analysis.get(date, {}).get("all_day")
+        if d and (d["risk_highspeed"] or d["cancellation_score"] >= 0.35):
+            dt = datetime.now(JST) + timedelta(days=delta)
+            long_risk_days.append({
+                "date_label": dt.strftime("%-m/%-d"),
+                "max_wave": d["max_wave"],
+                "score": d["cancellation_score"],
+            })
+    long_risk = len(long_risk_days) > 0
+
+    # ---- Slackメッセージ構築（短期＋長期を1通に） ----
+    print("\n[4] Slackメッセージ構築中...")
+
+    ferry_status = get_ferry_status_from_web()
+
+    # 短期セクション
+    short_section = f"""[{now.strftime('%m/%d %H:%M')}] Kucha フェリー予報
 
 [明日] {risk_label(tomorrow_data, tomorrow_morning, tomorrow_afternoon)}
   気象庁: {jma_waves.get('明日', '未取得')}
@@ -605,48 +633,55 @@ def run_ferry_check():
   早期注意(波浪): {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
 
 [注意報] {'あり(!!)' if warnings else 'なし'}
-"""
+[運航情報] {ferry_status[:60] if ferry_status else '未確認（8時以降に再確認）'}"""
 
-    # ---- 短期アラート ----
-    short_risk = (
-        (tomorrow_data and (tomorrow_data["risk_highspeed"] or tomorrow_data["risk_ferry"])) or
-        (day_after_data and (day_after_data["risk_highspeed"] or day_after_data["risk_ferry"])) or
-        len(warnings) > 0 or
-        prob_risk
-    )
-
-    if short_risk:
-        print("\n[4] 短期アラート: リスクあり → メッセージ生成中...")
-        ferry_status = get_ferry_status_from_web()
-        short_message = generate_shortterm_message(analysis, ferry_status, warnings)
-        send_slack(daily_summary + f"\n【運航情報】{ferry_status[:60] if ferry_status else '未確認'}\n\n" + short_message[:1200], emoji="")
-        print("  ✅ 短期アラート送信完了")
+    # 長期セクション
+    if long_risk:
+        risk_summary = " / ".join([f"{d['date_label']}波{d['max_wave']}m" for d in long_risk_days])
+        long_section = f"""
+--- 長期予報（3〜7日先）---
+[懸念日] {risk_summary}
+[早期注意] 明日:{jma_prob.get('明日',{}).get('level','なし')} / 明後日:{jma_prob.get('明後日',{}).get('level','なし')}"""
     else:
-        print("\n[4] 短期: リスクなし → デイリーサマリー送信")
-        send_slack(daily_summary, emoji="")
+        long_section = "\n--- 長期予報（3〜7日先）---\n[長期] 懸念なし"
 
-    # ---- 長期アラート ----
-    print("\n[5] 長期予報チェック中（3〜7日先）...")
+    # メッセージ生成（リスクありの場合のみ）
+    message_section = ""
+    if short_risk:
+        print("  短期リスクあり → メッセージ生成中...")
+        try:
+            short_message = generate_shortterm_message(analysis, ferry_status, warnings)
+            message_section += f"\n--- ゲスト向けメッセージ案（短期）---\n{short_message[:800]}"
+        except Exception as e:
+            print(f"  [警告] 短期メッセージ生成失敗: {e}")
+
+    if long_risk:
+        print("  長期リスクあり → メッセージ生成中...")
+        try:
+            result = generate_longterm_message(analysis, warnings)
+            if result:
+                long_message, _ = result
+                message_section += f"\n--- ゲスト向けメッセージ案（長期）---\n{long_message[:800]}"
+        except Exception as e:
+            print(f"  [警告] 長期メッセージ生成失敗: {e}")
+
+    # 1通にまとめて送信
+    full_message = short_section + long_section + message_section
+    send_slack(full_message, emoji="")
+    print("  ✅ Slack送信完了")
+
+    # [DB] 日次運航記録（Google Sheets蓄積）
+    print("\n[DB] 日次運航データ記録中...")
     try:
-        result = generate_longterm_message(analysis, warnings)
-        if result:
-            long_message, risk_days = result
-            risk_summary = " / ".join([f"{d['date_label']}波{d['max_wave']}m" for d in risk_days])
-            header = f"""🌊 Kucha 長期天候警戒 {now.strftime('%m/%d')}
-
-【懸念日】{risk_summary}
-【早期注意（波浪）】明日:{jma_prob.get('明日',{}).get('level','なし')} / 明後日:{jma_prob.get('明後日',{}).get('level','なし')}
-
-"""
-            send_slack(header + long_message[:1500], emoji="")
-            print(f"  ⚠️ 長期アラート送信完了（懸念日: {len(risk_days)}日）")
-        else:
-            print("  ✅ 長期: 3〜7日先に懸念なし")
+        from operation_logger import log_daily_record
+        from forecast_publisher import build_forecast_data
+        _fc = build_forecast_data(analysis, jma_waves, jma_prob)
+        log_daily_record(analysis, jma_waves, jma_prob, _fc)
     except Exception as e:
-        print(f"  [エラー] 長期予報生成失敗: {e}")
+        print(f"  [警告] DB記録エラー: {e}")
 
     # 画像生成・SNS投稿
-    print("\n[6] Publisher実行中...")
+    print("\n[5] Publisher実行中...")
     try:
         from forecast_publisher import run_publisher
         run_publisher(analysis, jma_waves, jma_prob)
