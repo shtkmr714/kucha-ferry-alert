@@ -538,6 +538,19 @@ def run_ferry_check():
     print(f"Kucha Ferry Alert v2: {now.strftime('%Y-%m-%d %H:%M')}")
     print('='*50)
 
+    # スケジュール実行の時刻ガード
+    # GitHub Actions のスケジューラーが古いキャッシュで意図しない時刻に実行されるケースへの対策
+    # 手動実行（workflow_dispatch）はスキップチェックなし
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "manual")
+    if event_name == "schedule":
+        # 許可時間帯（JST）: 7〜10時台（8:15 JST想定）、12〜14時台（13:00 JST想定）
+        allowed_hours = set(range(7, 11)) | set(range(12, 15))
+        if now.hour not in allowed_hours:
+            print(f"[スキップ] スケジュール外の時刻: {now.strftime('%H:%M')} JST")
+            print(f"  許可時間帯: 7〜10時 / 12〜14時（JST）")
+            print(f"  GitHubスケジューラーの遅延が原因の可能性があります。処理を中断します。")
+            return
+
     # 1. データ取得
     print("\n[1] データ取得中...")
     try:

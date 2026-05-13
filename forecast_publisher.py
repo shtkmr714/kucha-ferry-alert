@@ -897,7 +897,68 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
         else:
             lt_period_en = lt.get("lt_period_en", "")
 
-    fallback_caption = (
+    # リスクレベル別コメント（** による強調はAI感が出るため使用しない）
+    # 高速船欠航可能性の短期最大値でティアを判定
+    max_hs = max(short[0]['highspeed_pct'], short[1]['highspeed_pct'])
+
+    if max_hs <= 10 and not lt['has_risk']:
+        # Tier 1: 極低リスク
+        comment_ja = (
+            "\n🟢 今週は全日程で欠航リスク極めて低め！\n"
+            "島滞在中の方も、これから渡航予定の方も安心してプランを組めそうです。\n"
+        )
+        comment_en = (
+            "\n🟢 Low cancellation risk all week — great time to visit!\n"
+        )
+    elif max_hs <= 30 and not lt['has_risk']:
+        # Tier 2: 低リスク
+        comment_ja = (
+            "\n🟢 欠航リスクは低い見込みです。\n"
+            "出発前に最新の予報をご確認ください。\n"
+        )
+        comment_en = (
+            "\n🟢 Cancellation risk looks low. Check the forecast before departure.\n"
+        )
+    elif max_hs <= 30 and lt['has_risk']:
+        # Tier 3: 短期低・長期注意
+        comment_ja = (
+            "\n🟡 短期は問題なし。ただし来週以降に荒れる可能性があります。\n"
+            "引き続き予報をチェックしていきましょう。\n"
+        )
+        comment_en = (
+            "\n🟡 Short-term looks fine, but rougher conditions may develop next week. Keep an eye on forecasts.\n"
+        )
+    elif max_hs <= 60:
+        # Tier 4: 中リスク
+        comment_ja = (
+            "\n🟡 現時点では運航見込みですが、想定より荒天が進めば欠航リスクが出てきます。\n"
+            "最新情報をご確認ください。\n"
+        )
+        comment_en = (
+            "\n🟡 Currently operating, but cancellations may occur if conditions worsen. Check latest info.\n"
+        )
+    elif max_hs <= 80:
+        # Tier 5: 高リスク
+        comment_ja = (
+            "\n🔴 高速船の欠航リスクが高い状況です。\n"
+            "旅程は余裕をもって組んでおくことをおすすめします。最新情報は座間味村HPへ。\n"
+        )
+        comment_en = (
+            "\n🔴 High cancellation risk. Consider scheduling with some flexibility. Check Zamami Village website.\n"
+        )
+    else:
+        # Tier 6: 極高リスク
+        comment_ja = (
+            "\n🚨 高速船の欠航可能性が非常に高い状況です。\n"
+            "島内滞在中の方は帰島日の前倒しをご検討ください。渡航予定の方は旅程変更も選択肢に。\n"
+        )
+        comment_en = (
+            "\n🚨 Very high cancellation risk. Guests on the island should consider an earlier return. Those planning to visit may want to reconsider.\n"
+        )
+
+    # Instagram キャプションはテンプレート固定
+    # generate_instagram_caption() による API 生成は廃止（フォーマット崩れ防止）
+    ig_caption = (
         f"{forecast['update_date_ja']} {forecast['generated_at_label']}\n"
         f"座間味島・阿嘉島・慶留間島 フェリー欠航予報\n"
         f"\n"
@@ -905,6 +966,7 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
         f"明日 {short[0]['date_label']}  高速船 {short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%\n"
         f"明後日 {short[1]['date_label']} 高速船{short[1]['highspeed_pct']}% / フェリー{short[1]['ferry_pct']}%\n"
         f"長期（{lt_period_ja}）: {lt['risk_period'] if lt['has_risk'] else '懸念なし'} 最大{lt['max_pct']}%\n"
+        f"{comment_ja}"
         f"⚠️ AI予測・参考値です。公式情報は座間味村HPを参照ください。\n"
         f"#座間味島 #阿嘉島 #慶留間島 #フェリー #沖縄離島\n"
         f"\n"
@@ -916,22 +978,20 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
         f"Tomorrow ({short[0].get('date_label_en', '')}) High-Speed Boat {short[0]['highspeed_pct']}% / Ferry {short[0]['ferry_pct']}%\n"
         f"Day After ({short[1].get('date_label_en', '')}) High-Speed Boat {short[1]['highspeed_pct']}% / Ferry {short[1]['ferry_pct']}%\n"
         f"Long-term ({lt_period_en}): {'No significant Risk' if not lt['has_risk'] else lt['risk_period_en']}, max.{lt['max_pct']}%\n"
+        f"{comment_en}"
         f"⚠️ AI-based estimate, for reference only\n"
         f"Check the official Zamami Village Website for confirmed info\n"
         f"\n"
         f"#KeramaIslands #ZamamiIsland #OkinawaFerry"
     )
+    print("  Instagramキャプション生成完了（テンプレート使用）")
+
     try:
         post_text = generate_post_text(forecast)
         print("  X投稿文生成完了")
-        ig_caption = generate_instagram_caption(forecast)
-        print("  Instagramキャプション生成完了")
     except Exception as e:
-        print(f"  [エラー] 投稿文生成失敗（フォールバック使用）: {e}")
+        print(f"  [エラー] X投稿文生成失敗: {e}")
         post_text = None
-        ig_caption = None
-
-    ig_caption = ig_caption or fallback_caption
 
     # 4. DB保存
     print("\n[P4] DB保存中...")
