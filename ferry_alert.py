@@ -602,13 +602,25 @@ def load_manual_suspensions():
         return []
 
 
+SUSPENSION_HP_CHECK_DAYS = 10  # 開始日まで10日以内のみHP照合チェックを行う
+
+
 def detect_suspension_conflicts(scraped, manual):
     """スクレイプと手動入力の運休情報を比較し、齟齬を検出する"""
+    from datetime import date as _date
+    today = _date.today()
     conflicts = []
     for m in manual:
         m_start = m.get("start", "")
         m_end = m.get("end", "")
         m_service = m.get("service", "")
+        # 開始日まで10日以上先の場合はHPに未掲載でも正常 → HP照合スキップ
+        try:
+            days_until = (_date.fromisoformat(m_start) - today).days
+            if days_until > SUSPENSION_HP_CHECK_DAYS:
+                continue
+        except (ValueError, TypeError):
+            pass
         matching = [s for s in scraped
                     if s.get("service") in (m_service, "both") or m_service == "both"]
         if not matching:
