@@ -416,8 +416,9 @@ def make_image_short(forecast, output_path):
     SUSPENSION_BG_COLOR = hex_to_rgb("#7B96A4")
 
     f = {
-        "title_ja":  _load_font(FONT_BOLD,    46),
-        "title_en":  _load_font(FONT_MEDIUM,  26),
+        "island_title": _load_font(FONT_BOLD,   50),
+        "title_ja":  _load_font(FONT_BOLD,    44),
+        "title_en":  _load_font(FONT_MEDIUM,  24),
         "island":    _load_font(FONT_REGULAR, 22),
         "date":      _load_font(FONT_MEDIUM,  34),
         "date_en":   _load_font(FONT_REGULAR, 24),
@@ -432,14 +433,14 @@ def make_image_short(forecast, output_path):
         "xs":        _load_font(FONT_REGULAR, 17),
     }
 
-    # タイトル
-    draw.text((540, 48),  "フェリー欠航可能性 短期予報",
-              font=f["title_ja"], fill="white", anchor="mm")
-    draw.text((540, 88),  "Ferry Cancellation Risk  /  Short-term Forecast",
-              font=f["title_en"], fill=(255,255,255,200), anchor="mm")
-    draw.text((540, 114), "座間味島・阿嘉島・慶留間島  Zamami / Aka / Geruma",
-              font=f["island"], fill=(255,255,255,160), anchor="mm")
-    draw.line([(80,130),(1000,130)], fill=(255,255,255,100), width=1)
+    # タイトル（1枚目のため島名を大きく表示）
+    draw.text((540, 44),  "座間味島・阿嘉島",
+              font=f["island_title"], fill="white", anchor="mm")
+    draw.text((540, 90),  "フェリー欠航予測",
+              font=f["title_ja"], fill="#FFD54F", anchor="mm")
+    draw.text((540, 118), "Zamami / Aka  Ferry Cancellation Forecast",
+              font=f["title_en"], fill=(255,255,255,190), anchor="mm")
+    draw.line([(80,132),(1000,132)], fill=(255,255,255,100), width=1)
 
     positions = [270, 810]
     for i, day in enumerate(short[:2]):
@@ -762,24 +763,22 @@ def make_image_weather_data(forecast, output_path):
 
 
 def generate_images(forecast, output_dir="/tmp/ferry_images"):
-    """4枚の画像を生成してパスのリストを返す"""
+    """3枚の画像を生成してパスのリストを返す（表紙なし: 短期予報→長期予報→気象データ）"""
     os.makedirs(output_dir, exist_ok=True)
     now = datetime.now(JST)
     ts = now.strftime("%Y%m%d_%H%M")
 
     paths = {
-        "header":      f"{output_dir}/img1_header_{ts}.png",
-        "short":       f"{output_dir}/img2_short_{ts}.png",
-        "longterm":    f"{output_dir}/img3_longterm_{ts}.png",
-        "weatherdata": f"{output_dir}/img4_weatherdata_{ts}.png",
+        "short":       f"{output_dir}/img1_short_{ts}.png",
+        "longterm":    f"{output_dir}/img2_longterm_{ts}.png",
+        "weatherdata": f"{output_dir}/img3_weatherdata_{ts}.png",
     }
 
-    make_image_header(forecast, paths["header"])
     make_image_short(forecast, paths["short"])
     make_image_longterm(forecast, paths["longterm"])
     make_image_weather_data(forecast, paths["weatherdata"])
 
-    print(f"  画像4枚生成成功!")
+    print(f"  画像3枚生成成功!")
     return paths
 
 

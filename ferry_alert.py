@@ -838,6 +838,7 @@ def run_ferry_check():
 
     # [DB] 日次運航記録（Google Sheets蓄積）
     print("\n[DB] 日次運航データ記録中...")
+    _fc = None
     try:
         from operation_logger import log_daily_record
         from forecast_publisher import build_forecast_data
@@ -846,11 +847,27 @@ def run_ferry_check():
     except Exception as e:
         print(f"  [警告] DB記録エラー: {e}")
 
+    # 13:00台は欠航リスクが高い場合のみInstagram投稿
+    # 条件: 明日 or 明後日の高速船欠航確率が61%以上
+    is_afternoon_run = now.hour >= 12
+    if is_afternoon_run and _fc is not None:
+        _short = _fc["short_term"]
+        max_hs = max(_short[0]['highspeed_pct'], _short[1]['highspeed_pct'])
+        post_to_social = max_hs >= 61
+        if post_to_social:
+            print(f"  [13時台] 高速船リスク最大{max_hs}% ≥ 61% → Instagram投稿あり")
+        else:
+            print(f"  [13時台] 高速船リスク最大{max_hs}% < 61% → Instagram投稿スキップ")
+    else:
+        post_to_social = True  # 8:15は常に投稿 / _fc取得失敗時は安全側（投稿する）
+
     # 画像生成・SNS投稿
     print("\n[5] Publisher実行中...")
     try:
         from forecast_publisher import run_publisher
-        run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=planned_suspensions)
+        run_publisher(analysis, jma_waves, jma_prob,
+                      planned_suspensions=planned_suspensions,
+                      post_to_social=post_to_social)
     except Exception as e:
         print(f"  [警告] Publisher実行エラー: {e}")
 
