@@ -611,6 +611,13 @@ def detect_suspension_conflicts(scraped, manual):
         m_service = m.get("service", "")
         matching = [s for s in scraped
                     if s.get("service") in (m_service, "both") or m_service == "both"]
+        if not matching:
+            # HPに該当サービスの運休情報が見当たらない（手動のみ存在）
+            conflicts.append({
+                "service": m_service,
+                "manual": f"{m_start}〜{m_end}（{m.get('vessel_ja','')}：{m.get('reason_ja','')}）",
+                "scraped": "（HPに該当情報なし）",
+            })
         for s in matching:
             s_start = s.get("start", "")
             s_end = s.get("end", "")
@@ -681,9 +688,6 @@ def run_ferry_check():
             print(f"  許可時間帯: 7〜10時 / 12〜14時（JST）")
             print(f"  GitHubスケジューラーの遅延が原因の可能性があります。処理を中断します。")
             return
-
-    # 0. 計画運休情報取得
-    planned_suspensions = get_planned_suspensions()
 
     # 0. 計画運休情報取得
     planned_suspensions = get_planned_suspensions()

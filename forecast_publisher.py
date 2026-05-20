@@ -162,6 +162,9 @@ def score_to_pct_ferry(score):
 # 0. 計画運休ヘルパー
 # ============================================================
 
+SERVICE_JA = {"highspeed": "高速船", "ferry": "フェリー", "both": "高速船・フェリー"}
+
+
 def _is_date_suspended(date_str, planned_suspensions, service):
     """date_strがservice（"highspeed"/"ferry"）の計画運休期間内かチェック。該当するエントリを返す。"""
     from datetime import date as _date
@@ -704,7 +707,7 @@ def make_image_weather_data(forecast, output_path):
             e_label_en = datetime.strptime(sus["end"],   "%Y-%m-%d").strftime("%b %-d")
 
             draw.text((80, y),
-                      f"・{sus.get('vessel_ja','—')}（{sus.get('service_ja', sus.get('service',''))}）",
+                      f"・{sus.get('vessel_ja','—')}（{SERVICE_JA.get(sus.get('service',''), sus.get('service',''))}）",
                       font=f["label_ja"], fill="#C8E6C9", anchor="lm")
             draw.text((1010, y+11), f"{s_label}〜{e_label}",
                       font=f["value"], fill="#81C784", anchor="rm")
