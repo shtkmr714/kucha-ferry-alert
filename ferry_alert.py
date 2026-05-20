@@ -848,16 +848,22 @@ def run_ferry_check():
         print(f"  [警告] DB記録エラー: {e}")
 
     # 13:00台は欠航リスクが高い場合のみInstagram投稿
-    # 条件: 明日 or 明後日の高速船欠航確率が61%以上
+    # 条件①: 明日 or 明後日の高速船欠航確率が61%以上
+    # 条件②: 当日便が実際に欠航（HP運航情報に「欠航」「運休」を含む）
     is_afternoon_run = now.hour >= 12
     if is_afternoon_run and _fc is not None:
         _short = _fc["short_term"]
         max_hs = max(_short[0]['highspeed_pct'], _short[1]['highspeed_pct'])
-        post_to_social = max_hs >= 61
+        high_risk = max_hs >= 61
+        actual_cancel = bool(ferry_status and any(kw in ferry_status for kw in ["欠航", "運休"]))
+        post_to_social = high_risk or actual_cancel
+        reason = []
+        if high_risk:    reason.append(f"高速船リスク最大{max_hs}% ≥ 61%")
+        if actual_cancel: reason.append("当日便欠航確認")
         if post_to_social:
-            print(f"  [13時台] 高速船リスク最大{max_hs}% ≥ 61% → Instagram投稿あり")
+            print(f"  [13時台] Instagram投稿あり（{' / '.join(reason)}）")
         else:
-            print(f"  [13時台] 高速船リスク最大{max_hs}% < 61% → Instagram投稿スキップ")
+            print(f"  [13時台] 高速船リスク最大{max_hs}% < 61% かつ欠航なし → Instagram投稿スキップ")
     else:
         post_to_social = True  # 8:15は常に投稿 / _fc取得失敗時は安全側（投稿する）
 
