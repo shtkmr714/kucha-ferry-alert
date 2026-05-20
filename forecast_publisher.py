@@ -418,7 +418,7 @@ def make_image_short(forecast, output_path):
     f = {
         "island_title": _load_font(FONT_BOLD,   50),
         "title_ja":  _load_font(FONT_BOLD,    44),
-        "title_en":  _load_font(FONT_MEDIUM,  24),
+        "title_en":  _load_font(FONT_MEDIUM,  28),
         "island":    _load_font(FONT_REGULAR, 22),
         "date":      _load_font(FONT_MEDIUM,  34),
         "date_en":   _load_font(FONT_REGULAR, 24),
@@ -437,10 +437,10 @@ def make_image_short(forecast, output_path):
     draw.text((540, 44),  "座間味島・阿嘉島",
               font=f["island_title"], fill="white", anchor="mm")
     draw.text((540, 90),  "フェリー欠航予測",
-              font=f["title_ja"], fill="#FFD54F", anchor="mm")
-    draw.text((540, 118), "Zamami / Aka  Ferry Cancellation Forecast",
-              font=f["title_en"], fill=(255,255,255,190), anchor="mm")
-    draw.line([(80,132),(1000,132)], fill=(255,255,255,100), width=1)
+              font=f["island_title"], fill="white", anchor="mm")
+    draw.text((540, 122), "Zamami / Aka  Ferry Cancellation Forecast",
+              font=f["title_en"], fill=(255,255,255,210), anchor="mm")
+    draw.line([(80,138),(1000,138)], fill=(255,255,255,100), width=1)
 
     positions = [270, 810]
     for i, day in enumerate(short[:2]):

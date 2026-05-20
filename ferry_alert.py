@@ -849,21 +849,54 @@ def run_ferry_check():
 
     # 13:00台は欠航リスクが高い場合のみInstagram投稿
     # 条件①: 明日 or 明後日の高速船欠航確率が61%以上
-    # 条件②: 当日便が実際に欠航（HP運航情報に「欠航」「運休」を含む）
+    # 条件②: 当日便が気象理由で欠航（Google Sheetsの8:15記録を参照・weatherのみ対象）
     is_afternoon_run = now.hour >= 12
     if is_afternoon_run and _fc is not None:
         _short = _fc["short_term"]
         max_hs = max(_short[0]['highspeed_pct'], _short[1]['highspeed_pct'])
         high_risk = max_hs >= 61
-        actual_cancel = bool(ferry_status and any(kw in ferry_status for kw in ["欠航", "運休"]))
-        post_to_social = high_risk or actual_cancel
+
+        # スプシから当日の欠航理由を確認（equipment/dockは対象外）
+        actual_weather_cancel = False
+        try:
+            sheets_id = os.environ.get("GOOGLE_SHEETS_ID")
+            svc_json  = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+            if sheets_id and svc_json:
+                import gspread, json as _json
+                from google.oauth2.service_account import Credentials as _Creds
+                _creds = _Creds.from_service_account_info(
+                    _json.loads(svc_json),
+                    scopes=["https://spreadsheets.google.com/feeds",
+                            "https://www.googleapis.com/auth/drive"]
+                )
+                _gc = gspread.authorize(_creds)
+                _ws = _gc.open_by_key(sheets_id).worksheet("daily_operation_log")
+                _today = now.strftime("%Y-%m-%d")
+                _records = _ws.get_all_records()
+                _today_rec = next((r for r in _records if r.get("date") == _today), None)
+                if _today_rec:
+                    _fc_reason  = _today_rec.get("ferry_cancel_reason", "none")
+                    _hs_reason  = _today_rec.get("hs_cancel_reason", "none")
+                    _fe_cancel  = _today_rec.get("ferry_operated") == 0
+                    _hs_cancel  = (_today_rec.get("hs_bin1_operated") == 0 or
+                                   _today_rec.get("hs_bin2_operated") == 0)
+                    actual_weather_cancel = (
+                        (_fe_cancel and _fc_reason == "weather") or
+                        (_hs_cancel and _hs_reason == "weather")
+                    )
+                    print(f"  [13時台] スプシ確認: フェリー={_today_rec.get('ferry_operated')}({_fc_reason}) "
+                          f"高速船1便={_today_rec.get('hs_bin1_operated')}({_hs_reason})")
+        except Exception as e:
+            print(f"  [警告] スプシ欠航確認エラー（スキップ）: {e}")
+
+        post_to_social = high_risk or actual_weather_cancel
         reason = []
-        if high_risk:    reason.append(f"高速船リスク最大{max_hs}% ≥ 61%")
-        if actual_cancel: reason.append("当日便欠航確認")
+        if high_risk:              reason.append(f"高速船リスク最大{max_hs}% ≥ 61%")
+        if actual_weather_cancel:  reason.append("当日便が気象欠航")
         if post_to_social:
             print(f"  [13時台] Instagram投稿あり（{' / '.join(reason)}）")
         else:
-            print(f"  [13時台] 高速船リスク最大{max_hs}% < 61% かつ欠航なし → Instagram投稿スキップ")
+            print(f"  [13時台] 高速船リスク最大{max_hs}% < 61% かつ気象欠航なし → Instagram投稿スキップ")
     else:
         post_to_social = True  # 8:15は常に投稿 / _fc取得失敗時は安全側（投稿する）
 
