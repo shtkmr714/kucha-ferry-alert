@@ -438,7 +438,7 @@ def make_image_short(forecast, output_path):
               font=f["island_title"], fill="white", anchor="mm")
     draw.text((540, 90),  "フェリー欠航予測",
               font=f["island_title"], fill="white", anchor="mm")
-    draw.text((540, 122), "Zamami / Aka  Ferry Cancellation Forecast",
+    draw.text((540, 122), "Zamami / Aka  Ferry Cancellation Risk",
               font=f["title_en"], fill=(255,255,255,210), anchor="mm")
     draw.line([(80,138),(1000,138)], fill=(255,255,255,100), width=1)
 
