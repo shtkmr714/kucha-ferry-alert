@@ -158,7 +158,45 @@ def score_to_pct_ferry(score):
     return round(min(max(pct, 1), 99))
 
 
-def build_forecast_data(analysis, jma_waves, jma_prob):
+# ============================================================
+# 0. 計画運休ヘルパー
+# ============================================================
+
+def _is_date_suspended(date_str, planned_suspensions, service):
+    """date_strがservice（"highspeed"/"ferry"）の計画運休期間内かチェック。該当するエントリを返す。"""
+    from datetime import date as _date
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except Exception:
+        return None
+    for sus in (planned_suspensions or []):
+        if sus.get("service") not in (service, "both"):
+            continue
+        try:
+            start = datetime.strptime(sus["start"], "%Y-%m-%d").date()
+            end = datetime.strptime(sus["end"], "%Y-%m-%d").date()
+            if start <= target <= end:
+                return sus
+        except Exception:
+            continue
+    return None
+
+
+def _fmt_wave(text):
+    """気象庁波高テキストを整形（メートル→m）"""
+    if not text:
+        return "—"
+    return text.replace("メートル", "m").replace(" ", "")
+
+
+def _fmt_prob(text):
+    """警報級確率テキストを整形（なし→なし / None）"""
+    if not text or text in ("なし", ""):
+        return "なし / None"
+    return text
+
+
+def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None):
     """
     analysisから投稿・画像用データを構築。
     短期（明日・明後日）と長期（3〜7日）の欠航可能性%を返す。
@@ -202,6 +240,24 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
             "max_wave": all_day["max_wave"] if all_day else None,
             "max_wind": all_day.get("max_wind", "") if all_day else "",
             "max_swell": all_day.get("max_swell", "") if all_day else "",
+            "suspended_highspeed": bool(_is_date_suspended(date, planned_suspensions, "highspeed")),
+            "suspended_ferry":     bool(_is_date_suspended(date, planned_suspensions, "ferry")),
+            "suspension_reason_ja": (
+                _is_date_suspended(date, planned_suspensions, "highspeed") or
+                _is_date_suspended(date, planned_suspensions, "ferry") or {}
+            ).get("reason_ja", ""),
+            "suspension_reason_en": (
+                _is_date_suspended(date, planned_suspensions, "highspeed") or
+                _is_date_suspended(date, planned_suspensions, "ferry") or {}
+            ).get("reason_en", ""),
+            "suspension_vessel_ja": (
+                _is_date_suspended(date, planned_suspensions, "highspeed") or
+                _is_date_suspended(date, planned_suspensions, "ferry") or {}
+            ).get("vessel_ja", ""),
+            "suspension_vessel_en": (
+                _is_date_suspended(date, planned_suspensions, "highspeed") or
+                _is_date_suspended(date, planned_suspensions, "ferry") or {}
+            ).get("vessel_en", ""),
         })
 
     long_term = []
@@ -217,6 +273,8 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
                 "date_label": dt.strftime("%-m/%-d"),
                 "highspeed_pct": hs_pct,
                 "ferry_pct": score_to_pct_ferry(all_day["cancellation_score"]),
+                "suspended_highspeed": bool(_is_date_suspended(date, planned_suspensions, "highspeed")),
+                "suspended_ferry":     bool(_is_date_suspended(date, planned_suspensions, "ferry")),
             })
             if hs_pct >= 31:
                 risk_dates.append(dt)
@@ -257,10 +315,10 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
     tmr = short_term[0] if short_term else {}
     daf = short_term[1] if len(short_term) > 1 else {}
     weather_data = {
-        "jma_wave_tomorrow":    jma_waves.get("明日", ""),
-        "jma_wave_dayafter":    jma_waves.get("明後日", ""),
-        "jma_prob_tomorrow":    jma_prob.get("明日", {}).get("level", "なし"),
-        "jma_prob_dayafter":    jma_prob.get("明後日", {}).get("level", "なし"),
+        "jma_wave_tomorrow":    _fmt_wave(jma_waves.get("明日", "")),
+        "jma_wave_dayafter":    _fmt_wave(jma_waves.get("明後日", "")),
+        "jma_prob_tomorrow":    _fmt_prob(jma_prob.get("明日", {}).get("level", "")),
+        "jma_prob_dayafter":    _fmt_prob(jma_prob.get("明後日", {}).get("level", "")),
         "num_max_wave":  f"{tmr.get('max_wave', '')}m" if tmr.get("max_wave") else "",
         "num_max_swell": f"{tmr.get('max_swell', '')}m" if tmr.get("max_swell") else "",
         "num_max_wind":  f"{tmr.get('max_wind', '')} m/s" if tmr.get("max_wind") else "",
@@ -274,6 +332,10 @@ def build_forecast_data(analysis, jma_waves, jma_prob):
         "generated_at_label": "8:15更新" if now.hour < 11 else "13:00更新",
         "update_date_ja": now.strftime("%-m/%-d"),
         "update_date_en": now.strftime("%b %-d"),
+        "planned_suspensions": [
+            sus for sus in (planned_suspensions or [])
+            if sus.get("start") and sus.get("end")
+        ],
     }
 
 
@@ -333,57 +395,153 @@ def make_image_header(forecast, output_path):
 
 
 def make_image_short(forecast, output_path):
-    """画像②: 短期予報（日英併記・確定版）"""
+    """画像②: 短期予報（船種別計画運休対応版）"""
     short = forecast["short_term"]
-    max_pct = max(d["highspeed_pct"] for d in short)
-    img = Image.new("RGB", IMG_SIZE, color=hex_to_rgb(get_bg_color(max_pct)))
+
+    # 背景色: AI予測対象（運休でない）の最大リスクで決定
+    normal_pcts = [d["highspeed_pct"] for d in short if not d.get("suspended_highspeed")]
+    max_pct = max(normal_pcts) if normal_pcts else 10
+    bg = hex_to_rgb(get_bg_color(max_pct))
+
+    img = Image.new("RGB", IMG_SIZE, color=bg)
     draw = ImageDraw.Draw(img)
+
+    # レイアウト定数
+    HS_TOP, HS_BTM = 238, 492   # 高速船セクションのY範囲
+    FE_TOP, FE_BTM = 498, 758   # フェリーセクションのY範囲
+    DIVIDER_Y = 495
+    SUSPENSION_BG_COLOR = hex_to_rgb("#7B96A4")
+
     f = {
-        "title_ja": _load_font(FONT_BOLD,    46),
-        "title_en": _load_font(FONT_MEDIUM,  28),
-        "island":   _load_font(FONT_REGULAR, 24),
-        "date":     _load_font(FONT_MEDIUM,  34),
-        "date_en":  _load_font(FONT_REGULAR, 26),
-        "pct":      _load_font(FONT_BOLD,    90),
-        "type_ja":  _load_font(FONT_MEDIUM,  30),
-        "ampm":     _load_font(FONT_REGULAR, 24),
-        "jma":      _load_font(FONT_REGULAR, 19),
-        "xs":       _load_font(FONT_REGULAR, 18),
+        "title_ja":  _load_font(FONT_BOLD,    46),
+        "title_en":  _load_font(FONT_MEDIUM,  26),
+        "island":    _load_font(FONT_REGULAR, 22),
+        "date":      _load_font(FONT_MEDIUM,  34),
+        "date_en":   _load_font(FONT_REGULAR, 24),
+        "pct":       _load_font(FONT_BOLD,    86),
+        "suspended": _load_font(FONT_BOLD,    48),
+        "type_ja":   _load_font(FONT_MEDIUM,  28),
+        "ampm":      _load_font(FONT_REGULAR, 22),
+        "reason":    _load_font(FONT_MEDIUM,  24),
+        "reason_en": _load_font(FONT_REGULAR, 20),
+        "badge":     _load_font(FONT_BOLD,    18),
+        "jma":       _load_font(FONT_REGULAR, 17),
+        "xs":        _load_font(FONT_REGULAR, 17),
     }
 
-    draw.text((540, 48), "フェリー欠航可能性 短期予報", font=f["title_ja"], fill="white", anchor="mm")
-    draw.text((540, 90), "Ferry Cancellation Risk  /  Short-term Forecast", font=f["title_en"], fill="rgba(255,255,255,200)", anchor="mm")
-    draw.text((540, 118), "座間味島・阿嘉島・慶留間島  Zamami / Aka / Geruma", font=f["island"], fill="rgba(255,255,255,160)", anchor="mm")
-    draw.line([(80,135),(1000,135)], fill="rgba(255,255,255,100)", width=1)
+    # タイトル
+    draw.text((540, 48),  "フェリー欠航可能性 短期予報",
+              font=f["title_ja"], fill="white", anchor="mm")
+    draw.text((540, 88),  "Ferry Cancellation Risk  /  Short-term Forecast",
+              font=f["title_en"], fill=(255,255,255,200), anchor="mm")
+    draw.text((540, 114), "座間味島・阿嘉島・慶留間島  Zamami / Aka / Geruma",
+              font=f["island"], fill=(255,255,255,160), anchor="mm")
+    draw.line([(80,130),(1000,130)], fill=(255,255,255,100), width=1)
 
     positions = [270, 810]
     for i, day in enumerate(short[:2]):
         x = positions[i]
+        px1, px2 = x - 222, x + 222
+        sus_hs = day.get("suspended_highspeed", False)
+        sus_fe = day.get("suspended_ferry", False)
 
-        # 日付（明日 5/11 + Tomorrow May 11）
-        draw.text((x, 175), f"{day['label_ja']}  {day['date_label']}", font=f["date"], fill="white", anchor="mm")
-        draw.text((x, 215), f"{day['label_en']}  {day.get('date_label_en', '')}", font=f["date_en"], fill="rgba(255,255,255,180)", anchor="mm")
+        # 船種ごとのグレーパネル（運休の船種のみ）
+        if sus_hs:
+            draw.rectangle([(px1, HS_TOP), (px2, HS_BTM)], fill=SUSPENSION_BG_COLOR)
+        if sus_fe:
+            draw.rectangle([(px1, FE_TOP), (px2, FE_BTM)], fill=SUSPENSION_BG_COLOR)
 
-        # 高速船（High Speed Boat）
-        draw.text((x, 320), f"{day['highspeed_pct']}%", font=f["pct"], fill="white", anchor="mm")
-        draw.text((x, 382), "高速船  High Speed Boat", font=f["type_ja"], fill="rgba(255,255,255,220)", anchor="mm")
-        draw.text((x, 416), f"AM {day['highspeed_am_pct']}%  /  PM {day['highspeed_pm_pct']}%", font=f["ampm"], fill="rgba(255,255,255,180)", anchor="mm")
-        draw.line([(x-110,445),(x+110,445)], fill="rgba(255,255,255,90)", width=1)
+        # 日付ヘッダー
+        draw.text((x, 168), f"{day['label_ja']}  {day['date_label']}",
+                  font=f["date"], fill="white", anchor="mm")
+        draw.text((x, 208), f"{day['label_en']}  {day.get('date_label_en','')}",
+                  font=f["date_en"], fill=(255,255,255,180), anchor="mm")
 
-        # フェリー（Carなし・運航見込みなし）
-        draw.text((x, 548), f"{day['ferry_pct']}%", font=f["pct"], fill="white", anchor="mm")
-        draw.text((x, 610), "フェリー  Ferry", font=f["type_ja"], fill="rgba(255,255,255,220)", anchor="mm")
+        # ── 高速船セクション ──
+        hs_mid = (HS_TOP + HS_BTM) // 2  # 365
+        if sus_hs:
+            # 公式発表バッジ
+            bw, bh = 220, 34
+            by = HS_TOP + 14
+            draw.rounded_rectangle([(x-bw//2, by), (x+bw//2, by+bh)],
+                                    radius=7, fill="#FF5252")
+            draw.text((x, by+17), "公式発表  Official Notice",
+                      font=f["badge"], fill="white", anchor="mm")
+            # 運休
+            draw.text((x, hs_mid - 28), "運休",
+                      font=f["suspended"], fill="white", anchor="mm")
+            draw.text((x, hs_mid + 20), "Suspended",
+                      font=f["reason_en"], fill=(255,255,255,190), anchor="mm")
+            # 船名・理由
+            vessel = day.get("suspension_vessel_ja", "クイーンざまみ")
+            vessel_en = day.get("suspension_vessel_en", "Queen Zamami")
+            reason = day.get("suspension_reason_ja", "ドック入り")
+            reason_en = day.get("suspension_reason_en", "Dock Maintenance")
+            draw.text((x, hs_mid + 48),
+                      f"{vessel}  /  {reason}",
+                      font=f["reason"], fill=(255,220,170,220), anchor="mm")
+            draw.text((x, hs_mid + 72),
+                      f"{vessel_en}  /  {reason_en}",
+                      font=f["reason_en"], fill=(255,220,170,170), anchor="mm")
+        else:
+            draw.text((x, hs_mid - 52), f"{day['highspeed_pct']}%",
+                      font=f["pct"], fill="white", anchor="mm")
+            draw.text((x, hs_mid + 20), "高速船  High Speed Boat",
+                      font=f["type_ja"], fill=(255,255,255,220), anchor="mm")
+            draw.text((x, hs_mid + 50),
+                      f"AM {day['highspeed_am_pct']}%  /  PM {day['highspeed_pm_pct']}%",
+                      font=f["ampm"], fill=(255,255,255,175), anchor="mm")
 
-        # 気象庁・早期注意
-        if day["jma_wave"]:
-            draw.text((x, 690), f"気象庁: {day['jma_wave']}", font=f["jma"], fill="rgba(255,255,255,160)", anchor="mm")
-        if day["jma_prob"]:
-            draw.text((x, 714), f"早期注意(波浪): {day['jma_prob']}", font=f["jma"], fill="rgba(255,255,255,160)", anchor="mm")
+        # 区切り線（列ごと）
+        draw.line([(px1+10, DIVIDER_Y), (px2-10, DIVIDER_Y)],
+                  fill=(255,255,255,70), width=1)
 
-    draw.line([(540,145),(540,750)], fill="rgba(255,255,255,70)", width=1)
-    draw.line([(80,765),(1000,765)], fill="rgba(255,255,255,60)", width=1)
-    draw.text((540, 800), "※AI予測・参考値。公式情報は座間味村HPをご確認ください。", font=f["xs"], fill="rgba(255,255,255,160)", anchor="mm")
-    draw.text((540, 825), "*AI-based estimate. Check official Zamami Village website for confirmed info.", font=f["xs"], fill="rgba(255,255,255,140)", anchor="mm")
+        # ── フェリーセクション ──
+        fe_mid = (FE_TOP + FE_BTM) // 2  # 628
+        if sus_fe:
+            bw, bh = 220, 34
+            by = FE_TOP + 14
+            draw.rounded_rectangle([(x-bw//2, by), (x+bw//2, by+bh)],
+                                    radius=7, fill="#FF5252")
+            draw.text((x, by+17), "公式発表  Official Notice",
+                      font=f["badge"], fill="white", anchor="mm")
+            draw.text((x, fe_mid - 28), "運休",
+                      font=f["suspended"], fill="white", anchor="mm")
+            draw.text((x, fe_mid + 20), "Suspended",
+                      font=f["reason_en"], fill=(255,255,255,190), anchor="mm")
+            vessel = day.get("suspension_vessel_ja", "フェリーざまみ")
+            vessel_en = day.get("suspension_vessel_en", "Ferry Zamami")
+            reason = day.get("suspension_reason_ja", "ドック入り")
+            reason_en = day.get("suspension_reason_en", "Dock Maintenance")
+            draw.text((x, fe_mid + 48),
+                      f"{vessel}  /  {reason}",
+                      font=f["reason"], fill=(255,220,170,220), anchor="mm")
+            draw.text((x, fe_mid + 72),
+                      f"{vessel_en}  /  {reason_en}",
+                      font=f["reason_en"], fill=(255,220,170,170), anchor="mm")
+        else:
+            draw.text((x, fe_mid - 46), f"{day['ferry_pct']}%",
+                      font=f["pct"], fill="white", anchor="mm")
+            draw.text((x, fe_mid + 26), "フェリー  Ferry",
+                      font=f["type_ja"], fill=(255,255,255,220), anchor="mm")
+            if day.get("jma_wave"):
+                draw.text((x, fe_mid + 78),
+                          f"気象庁: {day['jma_wave']}",
+                          font=f["jma"], fill=(255,255,255,155), anchor="mm")
+            if day.get("jma_prob"):
+                draw.text((x, fe_mid + 98),
+                          f"早期注意(波浪): {day['jma_prob']}",
+                          font=f["jma"], fill=(255,255,255,155), anchor="mm")
+
+    # 中央縦線・フッター
+    draw.line([(540,135),(540,758)], fill=(255,255,255,55), width=1)
+    draw.line([(80, 768),(1000,768)], fill=(255,255,255,45), width=1)
+    draw.text((540, 802),
+              "※AI予測・参考値。運休は公式発表に基づきます。",
+              font=f["xs"], fill=(255,255,255,155), anchor="mm")
+    draw.text((540, 826),
+              "*AI estimates for weather risk. Suspension notice based on official announcement.",
+              font=f["xs"], fill=(255,255,255,125), anchor="mm")
 
     img.save(output_path)
     print(f"  画像②保存: {output_path}")
@@ -407,6 +565,7 @@ def make_image_longterm(forecast, output_path):
         "label_en": _load_font(FONT_REGULAR, 22),
         "col_hd":   _load_font(FONT_MEDIUM,  22),
         "bar":      _load_font(FONT_REGULAR, 21),
+        "badge":    _load_font(FONT_BOLD,    18),
         "xs":       _load_font(FONT_REGULAR, 17),
     }
 
@@ -446,8 +605,8 @@ def make_image_longterm(forecast, output_path):
     FOOTER_LINE_Y = 960  # フッター区切り線Y座標（縦線はここで止める）
     bar_top, bar_h, row_sp = 580, 28, 72
     cols = [
-        {"date_x": 155, "bar_x": 175, "bar_max": 270, "pct_x": 455, "key": "highspeed_pct"},
-        {"date_x": 595, "bar_x": 615, "bar_max": 270, "pct_x": 895, "key": "ferry_pct"},
+        {"date_x": 155, "bar_x": 175, "bar_max": 270, "pct_x": 455, "key": "highspeed_pct", "suspended_key": "suspended_highspeed"},
+        {"date_x": 595, "bar_x": 615, "bar_max": 270, "pct_x": 895, "key": "ferry_pct",     "suspended_key": "suspended_ferry"},
     ]
     for i, d in enumerate(lt["days"][:5]):
         y = bar_top + i * row_sp
@@ -456,11 +615,23 @@ def make_image_longterm(forecast, output_path):
         for col in cols:
             pct = d[col["key"]]
             bar_w = int(col["bar_max"] * pct / 100)
+            is_sus = col["suspended_key"] and d.get(col["suspended_key"], False)
             draw.text((col["date_x"], y + bar_h//2), label, font=f["bar"], fill="white", anchor="rm")
             draw.rectangle([(col["bar_x"], y),(col["bar_x"]+col["bar_max"], y+bar_h)], fill=(0,0,0,50))
-            if bar_w > 0:
-                draw.rectangle([(col["bar_x"], y),(col["bar_x"]+bar_w, y+bar_h)], fill=(255,255,255,210))
-            draw.text((col["pct_x"], y + bar_h//2), f"{pct}%", font=f["bar"], fill="white", anchor="lm")
+            if is_sus:
+                # 運休: ハッチング風（斜線）
+                for sx in range(col["bar_x"], col["bar_x"]+col["bar_max"], 8):
+                    draw.line([(sx, y),(sx+bar_h, y+bar_h)], fill=(150,180,200,180), width=2)
+                draw.rectangle([(col["bar_x"], y),(col["bar_x"]+col["bar_max"], y+bar_h)],
+                               outline=(180,210,230,200), width=1)
+                # 「運休 / Suspended」日英2行
+                f_sus_en = _load_font(FONT_REGULAR, 13)
+                draw.text((col["pct_x"], y + 6),  "運休",      font=f["badge"], fill=(180,220,255),     anchor="lm")
+                draw.text((col["pct_x"], y + 20), "Suspended", font=f_sus_en,   fill=(180,220,255,180), anchor="lm")
+            else:
+                if bar_w > 0:
+                    draw.rectangle([(col["bar_x"], y),(col["bar_x"]+bar_w, y+bar_h)], fill=(255,255,255,210))
+                draw.text((col["pct_x"], y + bar_h//2), f"{pct}%", font=f["bar"], fill="white", anchor="lm")
 
     # 縦区切り線：フッター区切り線で止める
     draw.line([(540, 535),(540, FOOTER_LINE_Y)], fill="rgba(255,255,255,50)", width=1)
@@ -486,6 +657,7 @@ def make_image_weather_data(forecast, output_path):
         "value":    _load_font(FONT_MEDIUM,  20),
         "src":      _load_font(FONT_REGULAR, 19),
         "foot":     _load_font(FONT_REGULAR, 17),
+        "badge_sm": _load_font(FONT_BOLD,    17),
     }
 
     # タイトル
@@ -503,8 +675,59 @@ def make_image_weather_data(forecast, output_path):
         draw.text((1010, y+12), str(value),            font=f["value"],    fill="white",   anchor="rm")
         return y + 58
 
+    y = 112
+
+    # 【計画運休情報】セクション（計画運休がある場合のみ）
+    suspensions = forecast.get("planned_suspensions", [])
+    if suspensions:
+        draw.rectangle([(60, y),(1020, y+42)], fill="#1B2A1B")
+        draw.text((80, y+21), "【計画運休情報 / Scheduled Suspension】",
+                  font=f["sec_hd"], fill="#81C784", anchor="lm")
+        draw.rounded_rectangle([(848, y+8),(1010, y+34)], radius=6, fill="#2E7D32")
+        draw.text((929, y+21), "公式発表 Official", font=f["badge_sm"], fill="white", anchor="mm")
+        y += 56
+
+        for sus in suspensions:
+            # 運休期間が予測範囲（今後7日）に含まれるものだけ表示
+            try:
+                now_date = datetime.now(JST).date()
+                sus_start = datetime.strptime(sus["start"], "%Y-%m-%d").date()
+                sus_end   = datetime.strptime(sus["end"],   "%Y-%m-%d").date()
+                if sus_end < now_date:
+                    continue  # 過去の運休はスキップ
+            except Exception:
+                pass
+
+            s_label    = datetime.strptime(sus["start"], "%Y-%m-%d").strftime("%-m/%-d")
+            e_label    = datetime.strptime(sus["end"],   "%Y-%m-%d").strftime("%-m/%-d")
+            s_label_en = datetime.strptime(sus["start"], "%Y-%m-%d").strftime("%b %-d")
+            e_label_en = datetime.strptime(sus["end"],   "%Y-%m-%d").strftime("%b %-d")
+
+            draw.text((80, y),
+                      f"・{sus.get('vessel_ja','—')}（{sus.get('service_ja', sus.get('service',''))}）",
+                      font=f["label_ja"], fill="#C8E6C9", anchor="lm")
+            draw.text((1010, y+11), f"{s_label}〜{e_label}",
+                      font=f["value"], fill="#81C784", anchor="rm")
+            draw.text((96,  y+24),
+                      f"  {sus.get('vessel_en','—')}",
+                      font=f["label_en"], fill="#A5D6A7", anchor="lm")
+            draw.text((1010, y+30),
+                      f"({s_label_en} - {e_label_en})",
+                      font=f["label_en"], fill="#66BB6A", anchor="rm")
+            y += 62
+            draw.text((80, y),
+                      f"  理由: {sus.get('reason_ja','—')}  /  {sus.get('reason_en','—')}",
+                      font=f["label_ja"], fill="#A5D6A7", anchor="lm")
+            draw.text((80, y+23),
+                      f"  出典: 座間味村HP（自動取得）",
+                      font=f["label_en"], fill="#69A96B", anchor="lm")
+            y += 52
+        y += 8
+        draw.line([(60, y),(1020, y)], fill="#334E7A", width=1)
+        y += 8
+
     # 【気象庁 / JMA】
-    y = section_header(118, "気象庁", "JMA")
+    y = section_header(y, "気象庁", "JMA")
     y = row(y, "🌊", "波高予報（明日）",          "Wave Height Forecast (Tomorrow)",   wd.get("jma_wave_tomorrow", "—"))
     y = row(y, "🌊", "波高予報（明後日）",         "Wave Height Forecast (Day After)",  wd.get("jma_wave_dayafter", "—"))
     y = row(y, "⚠", "早期注意情報・波浪（明日）",  "Early Warning Wave (Tomorrow)",     wd.get("jma_prob_tomorrow", "なし / None"))
@@ -852,7 +1075,7 @@ def post_to_instagram(image_paths, caption):
 # 6. メイン処理（ferry_alert.pyから呼び出す）
 # ============================================================
 
-def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
+def run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=None, post_to_social=True):
     """
     ferry_alert.pyのrun_ferry_check()から呼び出すメイン関数。
     forecast_dataを構築し、画像生成・投稿文生成・DB保存・SNS投稿を実行。
@@ -864,7 +1087,7 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
 
     # 1. 予測データ構築
     print("\n[P1] 予測データ構築中...")
-    forecast = build_forecast_data(analysis, jma_waves, jma_prob)
+    forecast = build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions)
 
     short = forecast["short_term"]
     print(f"  明日: 高速船{short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%")
@@ -962,27 +1185,47 @@ def run_publisher(analysis, jma_waves, jma_prob, post_to_social=True):
         f"{forecast['update_date_ja']} {forecast['generated_at_label']}\n"
         f"座間味島・阿嘉島・慶留間島 フェリー欠航予報\n"
         f"\n"
-        f"■船舶欠航可能性\n"
-        f"明日 {short[0]['date_label']}  高速船 {short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%\n"
-        f"明後日 {short[1]['date_label']} 高速船{short[1]['highspeed_pct']}% / フェリー{short[1]['ferry_pct']}%\n"
-        f"長期（{lt_period_ja}）: {lt['risk_period'] if lt['has_risk'] else '懸念なし'} 最大{lt['max_pct']}%\n"
-        f"{comment_ja}"
-        f"⚠️ AI予測・参考値です。公式情報は座間味村HPを参照ください。\n"
-        f"#座間味島 #阿嘉島 #慶留間島 #フェリー #沖縄離島\n"
-        f"\n"
-        f"\n"
-        f"{forecast['update_date_en']} updated\n"
-        f"Kerama Islands (Zamami, Aka, Geruma) Ferry Cancellation Forecast\n"
-        f"\n"
-        f"■Boat/Ferry Cancellation Risk\n"
-        f"Tomorrow ({short[0].get('date_label_en', '')}) High-Speed Boat {short[0]['highspeed_pct']}% / Ferry {short[0]['ferry_pct']}%\n"
-        f"Day After ({short[1].get('date_label_en', '')}) High-Speed Boat {short[1]['highspeed_pct']}% / Ferry {short[1]['ferry_pct']}%\n"
-        f"Long-term ({lt_period_en}): {'No significant Risk' if not lt['has_risk'] else lt['risk_period_en']}, max.{lt['max_pct']}%\n"
-        f"{comment_en}"
-        f"⚠️ AI-based estimate, for reference only\n"
-        f"Check the official Zamami Village Website for confirmed info\n"
-        f"\n"
-        f"#KeramaIslands #ZamamiIsland #OkinawaFerry"
+        + (
+            f"⚠️ クイーンざまみ（高速船）は{forecast['planned_suspensions'][0]['start'][5:].replace('-','/')}〜{forecast['planned_suspensions'][0]['end'][5:].replace('-','/')}ドック入り運休中\n"
+            if forecast.get("planned_suspensions") else ""
+        )
+        + f"■船舶欠航可能性\n"
+        + (
+            f"明日 {short[0]['date_label']}  高速船 運休（{short[0].get('suspension_reason_ja','ドック入り')}） / フェリー{short[0]['ferry_pct']}%\n"
+            if short[0].get("suspended_highspeed") else
+            f"明日 {short[0]['date_label']}  高速船 {short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%\n"
+        )
+        + (
+            f"明後日 {short[1]['date_label']} 高速船 運休（{short[1].get('suspension_reason_ja','ドック入り')}） / フェリー{short[1]['ferry_pct']}%\n"
+            if short[1].get("suspended_highspeed") else
+            f"明後日 {short[1]['date_label']} 高速船{short[1]['highspeed_pct']}% / フェリー{short[1]['ferry_pct']}%\n"
+        )
+        + f"長期（{lt_period_ja}）: {lt['risk_period'] if lt['has_risk'] else '懸念なし'} 最大{lt['max_pct']}%\n"
+        + f"{comment_ja}"
+        + f"⚠️ AI予測・参考値です。公式情報は座間味村HPを参照ください。\n"
+        + f"#座間味島 #阿嘉島 #慶留間島 #フェリー #沖縄離島\n"
+        + f"\n"
+        + f"\n"
+        + f"{forecast['update_date_en']} updated\n"
+        + f"Kerama Islands (Zamami, Aka, Geruma) Ferry Cancellation Forecast\n"
+        + f"\n"
+        + f"■Boat/Ferry Cancellation Risk\n"
+        + (
+            f"Tomorrow ({short[0].get('date_label_en', '')}) High-Speed Boat Suspended ({short[0].get('suspension_reason_en','Dock Maintenance')}) / Ferry {short[0]['ferry_pct']}%\n"
+            if short[0].get("suspended_highspeed") else
+            f"Tomorrow ({short[0].get('date_label_en', '')}) High-Speed Boat {short[0]['highspeed_pct']}% / Ferry {short[0]['ferry_pct']}%\n"
+        )
+        + (
+            f"Day After ({short[1].get('date_label_en', '')}) High-Speed Boat Suspended ({short[1].get('suspension_reason_en','Dock Maintenance')}) / Ferry {short[1]['ferry_pct']}%\n"
+            if short[1].get("suspended_highspeed") else
+            f"Day After ({short[1].get('date_label_en', '')}) High-Speed Boat {short[1]['highspeed_pct']}% / Ferry {short[1]['ferry_pct']}%\n"
+        )
+        + f"Long-term ({lt_period_en}): {'No significant Risk' if not lt['has_risk'] else lt['risk_period_en']}, max.{lt['max_pct']}%\n"
+        + f"{comment_en}"
+        + f"⚠️ AI-based estimate, for reference only\n"
+        + f"Check the official Zamami Village Website for confirmed info\n"
+        + f"\n"
+        + f"#KeramaIslands #ZamamiIsland #OkinawaFerry"
     )
     print("  Instagramキャプション生成完了（テンプレート使用）")
 

@@ -1,0 +1,13 @@
+[
+  {
+    "start": "2026-05-27",
+    "end": "2026-06-05",
+    "service": "highspeed",
+    "vessel_ja": "クイーンざまみ",
+    "vessel_en": "Queen Zamami",
+    "reason_ja": "ドック入り",
+    "reason_en": "Dock Maintenance",
+    "added": "2026-05-20",
+    "note": "座間味村HPより確認"
+  }
+]
