@@ -542,11 +542,21 @@ def scrape_planned_suspensions():
         text = soup.get_text(separator="\n", strip=True)
 
         lines = text.split("\n")
-        relevant = [l for l in lines if any(k in l for k in ["運休", "ドック", "クイーンざまみ", "フェリーざまみ"])]
-        if not relevant:
+        # クィーンざまみ（ィ有無両対応）も追加
+        keywords = ["運休", "ドック", "クイーンざまみ", "クィーンざまみ", "フェリーざまみ", "高速船"]
+        matched_indices = [i for i, l in enumerate(lines) if any(k in l for k in keywords)]
+        if not matched_indices:
             return []
 
-        snippet = "\n".join(relevant[:30])
+        # 行単位フィルタだと日付と船名が別行に分かれた場合に日付が欠落する。
+        # マッチ行の前後3行を含めてコンテキストを確保する。
+        context_indices = set()
+        for idx in matched_indices:
+            for j in range(max(0, idx - 3), min(len(lines), idx + 4)):
+                context_indices.add(j)
+        snippet = "\n".join(lines[i] for i in sorted(context_indices))
+        snippet = snippet[:2000]  # Claude への入力上限
+        print(f"  [計画運休スクレイプ] 抽出スニペット:\n{snippet[:300]}...")
         client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
         today_str = datetime.now(JST).strftime("%Y-%m-%d")
         year = datetime.now(JST).year
