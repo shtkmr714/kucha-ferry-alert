@@ -2,8 +2,8 @@ name: Kucha Ferry Alert
 
 on:
   schedule:
-    - cron: '15 23 * * *'
-    - cron: '0 4 * * *'
+    - cron: '15 23 * * *'   # 08:15 JST（前夜UTC18:00 runを取得＝最新）
+    - cron: '30 5 * * *'    # 14:30 JST（当日UTC00:00 runが出揃う時刻＝最新モデルを確実に取得）
   workflow_dispatch:
 
 permissions:

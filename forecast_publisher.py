@@ -199,12 +199,18 @@ def _fmt_prob(text):
     return text
 
 
-def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None):
+def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
+                        typhoon_by_date=None):
     """
     analysisから投稿・画像用データを構築。
     短期（明日・明後日）と長期（3〜7日）の欠航可能性%を返す。
+
+    typhoon_by_date: {"YYYY-MM-DD": {tier, hs_floor, fe_floor, ...}}
+      その日の台風接近フロアを欠航%の下限として適用（波モデルが穏やかでも
+      進路がかぶる日はリスクを立てる）。
     """
     now = datetime.now(JST)
+    typhoon_by_date = typhoon_by_date or {}
     SCORE_HIGHSPEED_RISK = 0.45
     SCORE_FERRY_RISK = 0.65
 
@@ -228,6 +234,17 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None)
         else:
             hs_pct = fe_pct = hs_am_pct = hs_pm_pct = 0
 
+        # シャドー記録用：台風フロア適用前の値（現行ロジック相当）を保持
+        hs_pct_base, fe_pct_base = hs_pct, fe_pct
+
+        # 台風フロア適用（波モデル値と台風接近フロアの大きい方を採用）
+        tphn = typhoon_by_date.get(date)
+        if tphn:
+            hs_pct = max(hs_pct, tphn["hs_floor"])
+            fe_pct = max(fe_pct, tphn["fe_floor"])
+            hs_am_pct = max(hs_am_pct, tphn["hs_floor"])
+            hs_pm_pct = max(hs_pm_pct, tphn["hs_floor"])
+
         short_term.append({
             "date": date,
             "date_label": date_label,
@@ -238,6 +255,9 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None)
             "highspeed_am_pct": hs_am_pct,
             "highspeed_pm_pct": hs_pm_pct,
             "ferry_pct": fe_pct,
+            # シャドー記録：台風フロア適用前（現行ロジック相当）
+            "highspeed_pct_base": hs_pct_base,
+            "ferry_pct_base": fe_pct_base,
             "jma_wave": jma_waves.get(label, ""),
             "jma_prob": jma_prob.get(label, {}).get("level", ""),
             "max_wave": all_day["max_wave"] if all_day else None,
@@ -261,6 +281,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None)
                 _is_date_suspended(date, planned_suspensions, "highspeed") or
                 _is_date_suspended(date, planned_suspensions, "ferry") or {}
             ).get("vessel_en", ""),
+            "typhoon": tphn,  # 台風フロア情報（なければNone）
         })
 
     long_term = []
@@ -271,13 +292,20 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None)
         all_day = analysis.get(date, {}).get("all_day")
         if all_day:
             hs_pct = score_to_pct_highspeed(all_day["cancellation_score"])
+            fe_pct = score_to_pct_ferry(all_day["cancellation_score"])
+            # 台風フロア適用
+            tphn = typhoon_by_date.get(date)
+            if tphn:
+                hs_pct = max(hs_pct, tphn["hs_floor"])
+                fe_pct = max(fe_pct, tphn["fe_floor"])
             long_term.append({
                 "date": date,
                 "date_label": dt.strftime("%-m/%-d"),
                 "highspeed_pct": hs_pct,
-                "ferry_pct": score_to_pct_ferry(all_day["cancellation_score"]),
+                "ferry_pct": fe_pct,
                 "suspended_highspeed": bool(_is_date_suspended(date, planned_suspensions, "highspeed")),
                 "suspended_ferry":     bool(_is_date_suspended(date, planned_suspensions, "ferry")),
+                "typhoon": tphn,
             })
             if hs_pct >= 31:
                 risk_dates.append(dt)
@@ -317,6 +345,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None)
     # 明日の数値予測データを weather_data としてまとめる
     tmr = short_term[0] if short_term else {}
     daf = short_term[1] if len(short_term) > 1 else {}
+    tmr_ad = analysis.get(tmr.get("date", ""), {}).get("all_day") or {}
     weather_data = {
         "jma_wave_tomorrow":    _fmt_wave(jma_waves.get("明日", "")),
         "jma_wave_dayafter":    _fmt_wave(jma_waves.get("明後日", "")),
@@ -325,14 +354,51 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None)
         "num_max_wave":  f"{tmr.get('max_wave', '')}m" if tmr.get("max_wave") else "",
         "num_max_swell": f"{tmr.get('max_swell', '')}m" if tmr.get("max_swell") else "",
         "num_max_wind":  f"{tmr.get('max_wind', '')} m/s" if tmr.get("max_wind") else "",
+        # 追加メトリクス（突風・周期・視程ほか）
+        "num_max_gust":         f"{tmr_ad.get('max_gust')} m/s" if tmr_ad.get("max_gust") else "",
+        "num_swell_period":     f"{tmr_ad.get('max_swell_period')} s" if tmr_ad.get("max_swell_period") else "",
+        "num_wave_period":      f"{tmr_ad.get('max_wave_period')} s" if tmr_ad.get("max_wave_period") else "",
+        "num_min_visibility":   f"{tmr_ad.get('min_visibility')/1000:.1f} km" if tmr_ad.get("min_visibility") else "",
+        "num_max_precip":       f"{tmr_ad.get('max_precip')} mm" if tmr_ad.get("max_precip") else "",
     }
+
+    # 台風サマリー（予測範囲内に接近予報がある場合のみ）
+    typhoon_summary = None
+    if typhoon_by_date:
+        in_range = {d: t for d, t in typhoon_by_date.items() if d in analysis}
+        if in_range:
+            names = sorted({t["name_ja"] for t in in_range.values()})
+            dates_sorted = sorted(in_range)
+            closest = min(in_range.values(), key=lambda t: t["dist_km"])
+            typhoon_summary = {
+                "names": names,
+                "name_label": " / ".join(names),
+                "days": [
+                    {
+                        "date": d,
+                        "date_label": datetime.strptime(d, "%Y-%m-%d").strftime("%-m/%-d"),
+                        "date_label_en": datetime.strptime(d, "%Y-%m-%d").strftime("%b %-d"),
+                        "tier": in_range[d]["tier"],
+                        "dist_km": in_range[d]["dist_km"],
+                        "in_storm": in_range[d]["in_storm"],
+                        "in_circle": in_range[d]["in_circle"],
+                        "extrapolated": in_range[d].get("extrapolated", False),
+                        "hs_floor": in_range[d]["hs_floor"],
+                        "fe_floor": in_range[d]["fe_floor"],
+                    }
+                    for d in dates_sorted
+                ],
+                "closest_dist_km": closest["dist_km"],
+                "max_tier": min(t["tier"] for t in in_range.values()),
+            }
 
     return {
         "short_term": short_term,
         "long_term": long_term_summary,
         "weather_data": weather_data,
+        "typhoon": typhoon_summary,
         "generated_at": now.strftime("%Y/%m/%d %H:%M"),
-        "generated_at_label": "8:15更新" if now.hour < 11 else "13:00更新",
+        "generated_at_label": "8:15更新" if now.hour < 11 else "14:30更新",
         "update_date_ja": now.strftime("%-m/%-d"),
         "update_date_en": now.strftime("%b %-d"),
         "planned_suspensions": [
@@ -730,6 +796,36 @@ def make_image_weather_data(forecast, output_path):
         draw.line([(60, y),(1020, y)], fill="#334E7A", width=1)
         y += 8
 
+    # 【台風情報】セクション（接近予報がある場合のみ）
+    typhoon = forecast.get("typhoon")
+    if typhoon:
+        draw.rectangle([(60, y),(1020, y+42)], fill="#3A1B1B")
+        draw.text((80, y+21), f"【台風情報 / Typhoon】 {typhoon['name_label']}",
+                  font=f["sec_hd"], fill="#FF8A80", anchor="lm")
+        draw.rounded_rectangle([(828, y+8),(1010, y+34)], radius=6, fill="#C62828")
+        draw.text((919, y+21), "進路予報 JMA Track", font=f["badge_sm"], fill="white", anchor="mm")
+        y += 56
+        for d in typhoon["days"][:6]:
+            if d.get("extrapolated"):
+                area_ja = "進路外挿（参考）"
+                area_en = "Extrapolated (reference)"
+            elif d["in_storm"]:
+                area_ja, area_en = "暴風域内", "In storm area"
+            elif d["in_circle"]:
+                area_ja, area_en = "予報円内", "In forecast circle"
+            else:
+                area_ja, area_en = f"中心{d['dist_km']}km", f"{d['dist_km']}km away"
+            draw.text((80, y), f"・{d['date_label']}  {area_ja}（最接近 {d['dist_km']}km）",
+                      font=f["label_ja"], fill="#FFCDD2", anchor="lm")
+            draw.text((1010, y+11), f"欠航フロア 高速船{d['hs_floor']}%/ﾌｪﾘｰ{d['fe_floor']}%",
+                      font=f["value"], fill="#FF8A80", anchor="rm")
+            draw.text((96, y+24), f"  {d['date_label_en']}  {area_en}",
+                      font=f["label_en"], fill="#EF9A9A", anchor="lm")
+            y += 52
+        y += 6
+        draw.line([(60, y),(1020, y)], fill="#334E7A", width=1)
+        y += 8
+
     # 【気象庁 / JMA】
     y = section_header(y, "気象庁", "JMA")
     y = row(y, "🌊", "波高予報（明日）",          "Wave Height Forecast (Tomorrow)",   wd.get("jma_wave_tomorrow", "—"))
@@ -742,7 +838,11 @@ def make_image_weather_data(forecast, output_path):
     y = section_header(y, "数値予測", "Numerical Model")
     y = row(y, "📊", "明日 最大波高",  "Tomorrow Max Wave Height",  wd.get("num_max_wave",  "—"))
     y = row(y, "📊", "明日 最大うねり", "Tomorrow Max Swell Height", wd.get("num_max_swell", "—"))
+    if wd.get("num_swell_period"):
+        y = row(y, "🌀", "明日 うねり周期", "Tomorrow Swell Period",     wd.get("num_swell_period", "—"))
     y = row(y, "💨", "明日 最大風速",  "Tomorrow Max Wind Speed",   wd.get("num_max_wind",  "—"))
+    if wd.get("num_max_gust"):
+        y = row(y, "💨", "明日 最大突風",  "Tomorrow Max Wind Gust",    wd.get("num_max_gust",  "—"))
 
     y += 12
     # 【情報源 / Sources】
@@ -903,16 +1003,34 @@ def save_to_sheets(forecast, analysis):
         sh = gc.open_by_key(sheets_id)
 
         # daily_forecastシートに記録
+        # 段階導入：将来のロジスティック回帰用に未使用メトリクスも全列蓄積する
+        HEADER = [
+            "recorded_at", "target_date", "wave_height_max",
+            "swell_height_max", "wind_speed_max", "jma_wave_text",
+            "jma_prob_level", "cancellation_score",
+            "predicted_pct_highspeed", "predicted_pct_ferry",
+            # ↓ v4 追加メトリクス
+            "wind_gust_max", "swell_period_max", "wave_period_max",
+            "wind_wave_height_max", "visibility_min", "precip_max",
+            "wave_direction", "wind_direction",
+            "typhoon_tier", "typhoon_dist_km",
+            # ↓ シャドー比較用：台風フロア適用前（現行ロジック相当）
+            # predicted_pct_* は台風フロア適用後（最終値）。base と比較して台風寄与を分離評価する。
+            "highspeed_pct_base", "ferry_pct_base",
+        ]
         try:
             ws = sh.worksheet("daily_forecast")
+            # 既存シートのヘッダーが旧形式なら最新ヘッダーへ更新（列ズレ防止）
+            try:
+                existing_header = ws.row_values(1)
+                if "wind_gust_max" not in existing_header:
+                    ws.update("A1", [HEADER])
+                    print("  daily_forecastヘッダーをv4形式に更新")
+            except Exception as he:
+                print(f"  [警告] ヘッダー更新スキップ: {he}")
         except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet("daily_forecast", rows=1000, cols=15)
-            ws.append_row([
-                "recorded_at", "target_date", "wave_height_max",
-                "swell_height_max", "wind_speed_max", "jma_wave_text",
-                "jma_prob_level", "cancellation_score",
-                "predicted_pct_highspeed", "predicted_pct_ferry"
-            ])
+            ws = sh.add_worksheet("daily_forecast", rows=1000, cols=len(HEADER) + 2)
+            ws.append_row(HEADER)
 
         now = datetime.now(JST)
         short = forecast["short_term"]
@@ -920,6 +1038,7 @@ def save_to_sheets(forecast, analysis):
         for day in short:
             date = day["date"]
             all_day = analysis.get(date, {}).get("all_day") or {}
+            tphn = day.get("typhoon") or {}
             row = [
                 now.strftime("%Y-%m-%d %H:%M"),
                 date,
@@ -931,6 +1050,18 @@ def save_to_sheets(forecast, analysis):
                 all_day.get("cancellation_score", ""),
                 day["highspeed_pct"],
                 day["ferry_pct"],
+                all_day.get("max_gust", ""),
+                all_day.get("max_swell_period", ""),
+                all_day.get("max_wave_period", ""),
+                all_day.get("max_wind_wave", ""),
+                all_day.get("min_visibility", ""),
+                all_day.get("max_precip", ""),
+                all_day.get("wave_direction", ""),
+                all_day.get("wind_direction", ""),
+                tphn.get("tier", ""),
+                tphn.get("dist_km", ""),
+                day.get("highspeed_pct_base", ""),
+                day.get("ferry_pct_base", ""),
             ]
             ws.append_row(row)
 
@@ -1077,7 +1208,8 @@ def post_to_instagram(image_paths, caption):
 # 6. メイン処理（ferry_alert.pyから呼び出す）
 # ============================================================
 
-def run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=None, post_to_social=True):
+def run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=None, post_to_social=True,
+                  typhoon_by_date=None):
     """
     ferry_alert.pyのrun_ferry_check()から呼び出すメイン関数。
     forecast_dataを構築し、画像生成・投稿文生成・DB保存・SNS投稿を実行。
@@ -1089,7 +1221,8 @@ def run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=None, post_
 
     # 1. 予測データ構築
     print("\n[P1] 予測データ構築中...")
-    forecast = build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions)
+    forecast = build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions,
+                                   typhoon_by_date=typhoon_by_date)
 
     short = forecast["short_term"]
     print(f"  明日: 高速船{short[0]['highspeed_pct']}% / フェリー{short[0]['ferry_pct']}%")

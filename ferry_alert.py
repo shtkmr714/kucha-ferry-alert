@@ -10,6 +10,7 @@ Kucha Ferry Alert System v3
 
 import os
 import json
+import math
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -22,8 +23,18 @@ JST = ZoneInfo("Asia/Tokyo")
 # 設定
 # ============================================================
 
-LAT = 26.23
-LON = 127.30
+# 取得地点：航路を代表する3地点。各時刻で「最も荒れる値」を採用する。
+# 欠航は航路上で最も荒れる区間（外洋に面した座間味側）で決まるため、
+# 単一の中間点では最悪区間を過小評価する（実測で確認）。
+#   座間味沖：外洋に面し最も荒れる / 海峡中央：航路中央 / 泊沖：那覇側
+ROUTE_POINTS = [
+    (26.23, 127.30, "座間味沖"),
+    (26.22, 127.48, "海峡中央"),
+    (26.21, 127.62, "泊沖"),
+]
+# 後方互換・台風距離計算の参照点（航路中央）
+LAT = 26.225
+LON = 127.485
 
 # 波高閾値
 THRESHOLD_HIGHSPEED = 3.0
@@ -52,72 +63,105 @@ ZAMAMI_URL = "https://www.vill.zamami.okinawa.jp/info/ship.html"
 # 1. データ取得
 # ============================================================
 
+def _as_location_list(data):
+    """Open-Meteoレスポンスを地点リストに正規化（単一地点はdict、複数地点はlistで返る）。"""
+    if isinstance(data, list):
+        return data
+    return [data]
+
+
+def _worst(values, mode="max"):
+    """Noneを除いて最悪値（max/min）を返す。全てNoneならNone。"""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None
+    return max(vals) if mode == "max" else min(vals)
+
+
 def get_marine_and_weather_data():
     """
     Open-Meteo Marine API + Weather APIから総合データを取得。
-    16日分取得し、短期（2日）・長期（3〜7日）に分けて返す。
+    航路代表3地点（ROUTE_POINTS）を1リクエストで取得し、各時刻で
+    「最も荒れる値」を採用した統合系列を返す（最悪区間の過小評価を防ぐ）。
+      - 波高・うねり・周期・風速・突風・降水: 最大
+      - 視程: 最小
+      - 波向・風向: 最大波高地点の値
     """
+    lats = ",".join(str(p[0]) for p in ROUTE_POINTS)
+    lons = ",".join(str(p[1]) for p in ROUTE_POINTS)
 
-    # 海洋データ（波）
     marine_url = "https://marine-api.open-meteo.com/v1/marine"
     marine_params = {
-        "latitude": LAT,
-        "longitude": LON,
+        "latitude": lats,
+        "longitude": lons,
         "hourly": [
-            "wave_height",
-            "wave_period",
-            "wave_direction",
-            "wind_wave_height",
-            "swell_wave_height",
-            "swell_wave_period",
+            "wave_height", "wave_period", "wave_direction",
+            "wind_wave_height", "swell_wave_height", "swell_wave_period",
         ],
         "timezone": "Asia/Tokyo",
         "forecast_days": 8,
     }
 
-    # 気象データ（風・視程）
     weather_url = "https://api.open-meteo.com/v1/forecast"
     weather_params = {
-        "latitude": LAT,
-        "longitude": LON,
+        "latitude": lats,
+        "longitude": lons,
         "hourly": [
-            "wind_speed_10m",
-            "wind_direction_10m",
-            "visibility",
-            "precipitation",
+            "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m",
+            "visibility", "precipitation",
         ],
         "timezone": "Asia/Tokyo",
         "forecast_days": 8,
     }
 
-    marine_resp = requests.get(marine_url, params=marine_params, timeout=15)
+    marine_resp = requests.get(marine_url, params=marine_params, timeout=20)
     marine_resp.raise_for_status()
-    marine_data = marine_resp.json()
+    marine_locs = _as_location_list(marine_resp.json())
 
-    weather_resp = requests.get(weather_url, params=weather_params, timeout=15)
+    weather_resp = requests.get(weather_url, params=weather_params, timeout=20)
     weather_resp.raise_for_status()
-    weather_data = weather_resp.json()
+    weather_locs = _as_location_list(weather_resp.json())
 
-    # データ統合
-    times = marine_data["hourly"]["time"]
+    # 時間軸は全地点共通（先頭地点を基準）
+    times = marine_locs[0]["hourly"]["time"]
     combined = []
 
+    def mh(loc, key, i):
+        return loc["hourly"].get(key, [None] * len(times))[i]
+
     for i, t in enumerate(times):
+        # 各地点の波高（最大波高地点を波向・風向の代表に使う）
+        waves = [mh(loc, "wave_height", i) for loc in marine_locs]
+        valid_waves = [(w, idx) for idx, w in enumerate(waves) if w is not None]
+        peak_idx = max(valid_waves)[1] if valid_waves else 0
+
+        # 風速・突風はkm/h→m/s（÷3.6）。各地点の最悪値を採る
+        wind_ms = [
+            (mh(loc, "wind_speed_10m", i) / 3.6) if mh(loc, "wind_speed_10m", i) is not None else None
+            for loc in weather_locs
+        ]
+        gust_ms = [
+            (mh(loc, "wind_gusts_10m", i) / 3.6) if mh(loc, "wind_gusts_10m", i) is not None else None
+            for loc in weather_locs
+        ]
+        worst_wind = _worst(wind_ms, "max")
+        worst_gust = _worst(gust_ms, "max")
+
         entry = {
             "time": t,
             "date": t.split("T")[0],
             "hour": int(t.split("T")[1].split(":")[0]),
-            "wave_height": marine_data["hourly"]["wave_height"][i],
-            "wave_period": marine_data["hourly"]["wave_period"][i],
-            "wave_direction": marine_data["hourly"]["wave_direction"][i],
-            "wind_wave_height": marine_data["hourly"]["wind_wave_height"][i],
-            "swell_wave_height": marine_data["hourly"]["swell_wave_height"][i],
-            "swell_wave_period": marine_data["hourly"]["swell_wave_period"][i],
-            # wind_speed_10mはkm/hで返るのでm/sに変換（÷3.6）
-            "wind_speed": round(weather_data["hourly"]["wind_speed_10m"][i] / 3.6, 1) if weather_data["hourly"]["wind_speed_10m"][i] is not None else None,
-            "wind_direction": weather_data["hourly"]["wind_direction_10m"][i],
-            "visibility": weather_data["hourly"]["visibility"][i],
-            "precipitation": weather_data["hourly"]["precipitation"][i],
+            "wave_height":       _worst([mh(loc, "wave_height", i) for loc in marine_locs], "max"),
+            "wave_period":       _worst([mh(loc, "wave_period", i) for loc in marine_locs], "max"),
+            "wave_direction":    mh(marine_locs[peak_idx], "wave_direction", i),
+            "wind_wave_height":  _worst([mh(loc, "wind_wave_height", i) for loc in marine_locs], "max"),
+            "swell_wave_height": _worst([mh(loc, "swell_wave_height", i) for loc in marine_locs], "max"),
+            "swell_wave_period": _worst([mh(loc, "swell_wave_period", i) for loc in marine_locs], "max"),
+            "wind_speed":  round(worst_wind, 1) if worst_wind is not None else None,
+            "wind_gust":   round(worst_gust, 1) if worst_gust is not None else None,
+            "wind_direction":  mh(weather_locs[peak_idx], "wind_direction_10m", i) if peak_idx < len(weather_locs) else mh(weather_locs[0], "wind_direction_10m", i),
+            "visibility":  _worst([mh(loc, "visibility", i) for loc in weather_locs], "min"),
+            "precipitation": _worst([mh(loc, "precipitation", i) for loc in weather_locs], "max"),
         }
         combined.append(entry)
 
@@ -238,6 +282,181 @@ def get_jma_probability():
         return {}
 
 
+# ============================================================
+# 1-2. 台風進路（気象庁 typhoon API）
+# ============================================================
+
+# 慶良間海域の代表点（航路中央）
+KERAMA_LAT, KERAMA_LON = 26.225, 127.485
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    """2点間の大圏距離（km）。"""
+    R = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+# 外挿（独自予測）設定
+TYPHOON_EXTRAP_TIER = 5          # 公式tier1〜4とは別格の「外挿（参考）」tier
+TYPHOON_EXTRAP_HS_FLOOR = 50     # 外挿フロアは控えめ（参考値）
+TYPHOON_EXTRAP_FE_FLOOR = 25
+TYPHOON_EXTRAP_MAX_DIST_KM = 600 # これより遠い外挿は採用しない
+DEFAULT_CIRCLE_GROWTH_M_PER_H = 2500  # 予報円半径の拡大率フォールバック
+
+
+def get_typhoon_forecast(window_days=8):
+    """
+    気象庁 typhoon API から活動中の台風進路を取得し、
+    日付別の慶良間接近リスク（フロア）を返す。
+
+    公式進路（最大約5日先）:
+      tier1 暴風警報域内        → 高速船95% / フェリー85%
+      tier2 予報円内＋暴風域あり  → 高速船80% / フェリー60%
+      tier3 予報円内のみ         → 高速船60% / フェリー35%
+      tier4 中心〜500km          → 高速船40%（控えめ）
+
+    独自外挿（6〜8日先・公式予報の範囲外）:
+      tier5 移動ベクトル外挿で接近見込み → 高速船50% / フェリー25%（参考・不確実性大）
+        - 最終2点から速度ベクトルを算出して中心位置を外挿
+        - 予報円の拡大率を延長して不確実性円を広げ、その内側＋600km以内なら採用
+        - "extrapolated": True ラベルを付け、公式扱いしない
+
+    戻り値: {"YYYY-MM-DD": {tier, hs_floor, fe_floor, name_ja, dist_km,
+                            in_storm, in_circle, extrapolated, tcid}}
+    """
+    result = {}
+    try:
+        idx = requests.get(
+            "https://www.jma.go.jp/bosai/typhoon/data/targetTc.json", timeout=10
+        ).json()
+    except Exception as e:
+        print(f"[警告] 台風一覧取得エラー: {e}")
+        return result
+
+    today = datetime.now(JST).date()
+    window_end = today + timedelta(days=window_days - 1)
+
+    def _set(date, tier, hs, fe, name_ja, dist, in_storm, in_circle, extrapolated, tcid):
+        prev = result.get(date)
+        if prev is None or tier < prev["tier"]:
+            result[date] = {
+                "tier": tier, "hs_floor": hs, "fe_floor": fe,
+                "name_ja": name_ja, "dist_km": round(dist),
+                "in_storm": in_storm, "in_circle": in_circle,
+                "extrapolated": extrapolated, "tcid": tcid,
+            }
+
+    for tc in idx:
+        tcid = tc.get("tropicalCyclone")
+        if not tcid:
+            continue
+        name_ja = ""
+        try:
+            fc = requests.get(
+                f"https://www.jma.go.jp/bosai/typhoon/data/{tcid}/forecast.json",
+                timeout=10,
+            ).json()
+        except Exception as e:
+            print(f"[警告] 台風進路取得エラー {tcid}: {e}")
+            continue
+
+        points = []   # [(datetime, lat, lon)] 速度外挿用
+        circles = []  # [(hours_from_now, radius_m)] 拡大率算出用
+
+        for part in fc:
+            if part.get("part") == "title":
+                name_ja = part.get("name", {}).get("jp", "") or tcid
+                continue
+
+            center = part.get("center")
+            vt = part.get("validtime", {}).get("JST")
+            if not center or not vt:
+                continue
+
+            try:
+                vt_dt = datetime.fromisoformat(vt)
+            except ValueError:
+                vt_dt = None
+            if vt_dt is not None:
+                points.append((vt_dt, center[0], center[1]))
+
+            date = vt.split("T")[0]
+            dist = _haversine_km(KERAMA_LAT, KERAMA_LON, center[0], center[1])
+
+            circle_r = part.get("probabilityCircle", {}).get("radius")
+            if circle_r is not None and vt_dt is not None:
+                circles.append(((vt_dt - datetime.now(JST)).total_seconds() / 3600, circle_r))
+            in_circle = circle_r is not None and dist * 1000 <= circle_r
+
+            storm = part.get("stormWarningArea")
+            in_storm = False
+            if storm and storm.get("arc"):
+                for arc in storm["arc"]:
+                    try:
+                        c, r = arc[0], arc[1]
+                        if _haversine_km(KERAMA_LAT, KERAMA_LON, c[0], c[1]) * 1000 <= r:
+                            in_storm = True
+                            break
+                    except (IndexError, TypeError):
+                        continue
+
+            if in_storm:
+                tier, hs, fe = 1, 95, 85
+            elif in_circle and storm:
+                tier, hs, fe = 2, 80, 60
+            elif in_circle:
+                tier, hs, fe = 3, 60, 35
+            elif dist <= 500:
+                tier, hs, fe = 4, 40, 0
+            else:
+                continue
+
+            _set(date, tier, hs, fe, name_ja, dist, in_storm, in_circle, False, tcid)
+
+        # ---- 独自外挿（公式予報の最終点より先の日を補完）----
+        if len(points) >= 2:
+            points.sort(key=lambda p: p[0])
+            (t0, lat0, lon0), (t1, lat1, lon1) = points[-2], points[-1]
+            dt_h = (t1 - t0).total_seconds() / 3600
+            if dt_h > 0:
+                dlat_dt = (lat1 - lat0) / dt_h    # 度/時
+                dlon_dt = (lon1 - lon0) / dt_h
+                # 予報円の拡大率（m/時）
+                if len(circles) >= 2:
+                    circles.sort()
+                    (h_a, r_a), (h_b, r_b) = circles[0], circles[-1]
+                    growth = (r_b - r_a) / (h_b - h_a) if h_b > h_a else DEFAULT_CIRCLE_GROWTH_M_PER_H
+                else:
+                    growth = DEFAULT_CIRCLE_GROWTH_M_PER_H
+                last_r = circles[-1][1] if circles else 300000
+                last_date = t1.date()
+
+                for delta in range(window_days):
+                    d = today + timedelta(days=delta)
+                    if d <= last_date or d > window_end:
+                        continue  # 公式範囲内 or 窓外はスキップ
+                    # 当日12:00 JST を代表時刻に外挿
+                    target = datetime(d.year, d.month, d.day, 12, 0, tzinfo=JST)
+                    h_ahead = (target - t1).total_seconds() / 3600
+                    if h_ahead <= 0:
+                        continue
+                    ex_lat = lat1 + dlat_dt * h_ahead
+                    ex_lon = lon1 + dlon_dt * h_ahead
+                    ex_dist = _haversine_km(KERAMA_LAT, KERAMA_LON, ex_lat, ex_lon)
+                    # 不確実性円（拡大率を延長）
+                    unc_r = last_r + max(0.0, growth) * h_ahead
+                    if ex_dist * 1000 <= unc_r and ex_dist <= TYPHOON_EXTRAP_MAX_DIST_KM:
+                        _set(d.strftime("%Y-%m-%d"), TYPHOON_EXTRAP_TIER,
+                             TYPHOON_EXTRAP_HS_FLOOR, TYPHOON_EXTRAP_FE_FLOOR,
+                             name_ja, ex_dist, False, False, True, tcid)
+
+    return result
+
+
 def get_ferry_status_from_web():
     """座間味村HPから運航情報を取得。"""
     try:
@@ -284,19 +503,33 @@ def get_ferry_status_from_web():
 # 2. 欠航スコアリング
 # ============================================================
 
-def calc_cancellation_score(wave_h, swell_h, wind_spd, has_warning):
+def calc_cancellation_score(wave_h, swell_h, wind_spd, has_warning,
+                            gust=None, swell_period=None):
     """
     各メトリクスを0〜1に正規化して欠航スコアを算出。
     スコアが高いほど欠航リスクが高い。
+
+    段階導入（v4）：既存4項目の重み構造は維持しつつ、
+      - 突風(gust): 風項を「平均風速 or 突風(25m/s=1.0)」の強い方で評価
+      - うねり周期(swell_period): 長周期(>8s)は同じ波高でも動揺が大きいため
+        うねり項を最大1.3倍まで割り増し
+    を補正項として加える（過去スコアとの不連続を最小化）。
     """
     # 波高スコア（0m=0, 5m以上=1）
     wave_score = min(wave_h / 5.0, 1.0) if wave_h else 0
 
     # うねりスコア（0m=0, 4m以上=1）
     swell_score = min(swell_h / 4.0, 1.0) if swell_h else 0
+    # 長周期うねり補正：8秒を基準に、超過1秒あたり+3.75%（上限1.3倍）
+    if swell_period and swell_h:
+        factor = 1.0 + max(0.0, swell_period - 8.0) * 0.0375
+        swell_score = min(swell_score * min(factor, 1.3), 1.0)
 
     # 風速スコア（0m/s=0, 20m/s以上=1）
     wind_score = min(wind_spd / 20.0, 1.0) if wind_spd else 0
+    # 突風補正：突風は25m/sで1.0正規化し、平均風速と強い方を採用
+    if gust:
+        wind_score = max(wind_score, min(gust / 25.0, 1.0))
 
     # 注意報スコア
     warning_score = 1.0 if has_warning else 0.0
@@ -324,18 +557,49 @@ def analyze_period(hourly_data, warnings):
 
     has_warning = len(warnings) > 0
 
+    def _max(key):
+        vals = [d.get(key) for d in valid if d.get(key) is not None]
+        return max(vals) if vals else None
+
+    def _min(key):
+        vals = [d.get(key) for d in valid if d.get(key) is not None]
+        return min(vals) if vals else None
+
     max_wave = max(d["wave_height"] for d in valid)
-    max_swell = max(d["swell_wave_height"] for d in valid if d["swell_wave_height"])
-    max_wind = max(d["wind_speed"] for d in valid if d["wind_speed"])
+    max_swell = _max("swell_wave_height")
+    max_wind = _max("wind_speed")
+    max_gust = _max("wind_gust")
+    max_swell_period = _max("swell_wave_period")
     avg_wave = sum(d["wave_height"] for d in valid) / len(valid)
 
-    score = calc_cancellation_score(max_wave, max_swell or 0, max_wind or 0, has_warning)
+    # 追加メトリクス（スコア反映は段階導入のため当面DB蓄積用）
+    max_wave_period = _max("wave_period")
+    max_wind_wave = _max("wind_wave_height")
+    min_visibility = _min("visibility")
+    max_precip = _max("precipitation")
+    # 代表波向・風向は最大波高時刻の値
+    peak = max(valid, key=lambda d: d["wave_height"])
+    wave_dir = peak.get("wave_direction")
+    wind_dir = peak.get("wind_direction")
+
+    score = calc_cancellation_score(
+        max_wave, max_swell or 0, max_wind or 0, has_warning,
+        gust=max_gust, swell_period=max_swell_period,
+    )
 
     return {
         "max_wave": round(max_wave, 1),
         "avg_wave": round(avg_wave, 1),
         "max_swell": round(max_swell, 1) if max_swell else None,
         "max_wind": round(max_wind, 1) if max_wind else None,
+        "max_gust": round(max_gust, 1) if max_gust else None,
+        "max_swell_period": round(max_swell_period, 1) if max_swell_period else None,
+        "max_wave_period": round(max_wave_period, 1) if max_wave_period else None,
+        "max_wind_wave": round(max_wind_wave, 1) if max_wind_wave else None,
+        "min_visibility": round(min_visibility) if min_visibility is not None else None,
+        "max_precip": round(max_precip, 1) if max_precip is not None else None,
+        "wave_direction": round(wave_dir) if wave_dir is not None else None,
+        "wind_direction": round(wind_dir) if wind_dir is not None else None,
         "has_warning": has_warning,
         "cancellation_score": score,
         "risk_highspeed": max_wave >= THRESHOLD_HIGHSPEED or score >= SCORE_HIGHSPEED_RISK,
@@ -703,11 +967,11 @@ def run_ferry_check():
     # 手動実行（workflow_dispatch）はスキップチェックなし
     event_name = os.environ.get("GITHUB_EVENT_NAME", "manual")
     if event_name == "schedule":
-        # 許可時間帯（JST）: 7〜10時台（8:15 JST想定）、12〜14時台（13:00 JST想定）
-        allowed_hours = set(range(7, 11)) | set(range(12, 15))
+        # 許可時間帯（JST）: 7〜10時台（8:15 JST想定）、12〜15時台（14:30 JST想定＋Actions遅延吸収）
+        allowed_hours = set(range(7, 11)) | set(range(12, 16))
         if now.hour not in allowed_hours:
             print(f"[スキップ] スケジュール外の時刻: {now.strftime('%H:%M')} JST")
-            print(f"  許可時間帯: 7〜10時 / 12〜14時（JST）")
+            print(f"  許可時間帯: 7〜10時 / 12〜15時（JST）")
             print(f"  GitHubスケジューラーの遅延が原因の可能性があります。処理を中断します。")
             return
 
@@ -738,9 +1002,32 @@ def run_ferry_check():
     # 早期注意情報で「高」があれば短期リスクとして扱う
     prob_risk = any(v.get("level") == "高" for v in jma_prob.values())
 
+    # 2-2. 台風進路取得（日付別の慶良間接近フロア）
+    print("\n[2-2] 台風進路取得中...")
+    typhoon_by_date = get_typhoon_forecast()
+    if typhoon_by_date:
+        for _d in sorted(typhoon_by_date):
+            _t = typhoon_by_date[_d]
+            print(f"  {_d}: {_t['name_ja']} tier{_t['tier']} "
+                  f"距離{_t['dist_km']}km フロア高速船{_t['hs_floor']}%/フェリー{_t['fe_floor']}%")
+    else:
+        print("  活動中の台風で慶良間に影響するものなし")
+
     # 3. 分析
     print("\n[3] データ分析中...")
     analysis = analyze_all_data(combined_data, warnings)
+
+    # 3-2. 台風フロアを analysis に反映（波モデルが穏やかでも進路がかぶる日はリスクを立てる）
+    for _date, _tinfo in typhoon_by_date.items():
+        node = analysis.get(_date)
+        if not node or not node.get("all_day"):
+            continue
+        node["all_day"]["typhoon"] = _tinfo
+        # tier3以下（予報円内）で高速船リスク、tier2以下（暴風域 or 予報円内＋暴風域）でフェリーも
+        if _tinfo["tier"] <= 3:
+            node["all_day"]["risk_highspeed"] = True
+        if _tinfo["tier"] <= 2:
+            node["all_day"]["risk_ferry"] = True
 
     today = datetime.now(JST).strftime("%Y-%m-%d")
     tomorrow = (datetime.now(JST) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -771,11 +1058,17 @@ def run_ferry_check():
         return f"波{data['max_wave']}m うねり{data.get('max_swell','?')}m 風{data.get('max_wind','?')}m/s → {risk}{time_detail}"
 
     # ---- 短期リスク判定 ----
+    # 台風フロアは analysis の risk_highspeed/risk_ferry に既に反映済み
+    typhoon_short_risk = any(
+        d in typhoon_by_date and typhoon_by_date[d]["tier"] <= 3
+        for d in (tomorrow, day_after)
+    )
     short_risk = (
         (tomorrow_data and (tomorrow_data["risk_highspeed"] or tomorrow_data["risk_ferry"])) or
         (day_after_data and (day_after_data["risk_highspeed"] or day_after_data["risk_ferry"])) or
         len(warnings) > 0 or
-        prob_risk
+        prob_risk or
+        typhoon_short_risk
     )
 
     # ---- 長期リスク判定（3〜7日先） ----
@@ -841,8 +1134,30 @@ def run_ferry_check():
         except Exception as e:
             print(f"  [警告] 長期メッセージ生成失敗: {e}")
 
+    # 台風セクション（活動中かつ慶良間に影響がある場合のみ）
+    typhoon_section = ""
+    if typhoon_by_date:
+        tcnames = sorted({t["name_ja"] for t in typhoon_by_date.values()})
+        lines = [f"\n--- 台風情報 ---", f"[台風] {' / '.join(tcnames)} 接近予報あり"]
+        for _d in sorted(typhoon_by_date):
+            _t = typhoon_by_date[_d]
+            dt = datetime.strptime(_d, "%Y-%m-%d")
+            if _t.get("extrapolated"):
+                area = "進路外挿(参考)"
+            elif _t["in_storm"]:
+                area = "暴風域内"
+            elif _t["in_circle"]:
+                area = "予報円内"
+            else:
+                area = f"中心{_t['dist_km']}km"
+            lines.append(
+                f"  {dt.strftime('%-m/%-d')}: {area}（最接近{_t['dist_km']}km）"
+                f" → 欠航フロア 高速船{_t['hs_floor']}%/フェリー{_t['fe_floor']}%"
+            )
+        typhoon_section = "\n".join(lines)
+
     # 1通にまとめて送信
-    full_message = short_section + long_section + message_section
+    full_message = short_section + typhoon_section + long_section + message_section
     send_slack(full_message, emoji="")
     print("  ✅ Slack送信完了")
 
@@ -852,7 +1167,8 @@ def run_ferry_check():
     try:
         from operation_logger import log_daily_record
         from forecast_publisher import build_forecast_data
-        _fc = build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions)
+        _fc = build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions,
+                                  typhoon_by_date=typhoon_by_date)
         log_daily_record(analysis, jma_waves, jma_prob, _fc)
     except Exception as e:
         print(f"  [警告] DB記録エラー: {e}")
@@ -916,7 +1232,8 @@ def run_ferry_check():
         from forecast_publisher import run_publisher
         run_publisher(analysis, jma_waves, jma_prob,
                       planned_suspensions=planned_suspensions,
-                      post_to_social=post_to_social)
+                      post_to_social=post_to_social,
+                      typhoon_by_date=typhoon_by_date)
     except Exception as e:
         print(f"  [警告] Publisher実行エラー: {e}")
 
