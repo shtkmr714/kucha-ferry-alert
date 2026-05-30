@@ -298,17 +298,32 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
             if tphn:
                 hs_pct = max(hs_pct, tphn["hs_floor"])
                 fe_pct = max(fe_pct, tphn["fe_floor"])
+            sus_hs = bool(_is_date_suspended(date, planned_suspensions, "highspeed"))
+            sus_fe = bool(_is_date_suspended(date, planned_suspensions, "ferry"))
             long_term.append({
                 "date": date,
                 "date_label": dt.strftime("%-m/%-d"),
                 "highspeed_pct": hs_pct,
                 "ferry_pct": fe_pct,
-                "suspended_highspeed": bool(_is_date_suspended(date, planned_suspensions, "highspeed")),
-                "suspended_ferry":     bool(_is_date_suspended(date, planned_suspensions, "ferry")),
+                "suspended_highspeed": sus_hs,
+                "suspended_ferry":     sus_fe,
                 "typhoon": tphn,
             })
-            if hs_pct >= 31:
+            # 運休中の船種は欠航リスク判定から除外する
+            # （その日は天候によらず運休なので、運航中の船種の%で判定する）
+            eff_pcts = []
+            if not sus_hs: eff_pcts.append(hs_pct)
+            if not sus_fe: eff_pcts.append(fe_pct)
+            eff_pct = max(eff_pcts) if eff_pcts else 0
+            if eff_pct >= 31:
                 risk_dates.append(dt)
+
+    # 長期内の各日の「運航中船種の最大%」を算出（運休船種は除外）
+    def _effective(d):
+        cands = []
+        if not d.get("suspended_highspeed"): cands.append(d["highspeed_pct"])
+        if not d.get("suspended_ferry"):     cands.append(d["ferry_pct"])
+        return max(cands) if cands else 0
 
     # 長期リスク期間のサマリー
     if risk_dates:
@@ -316,7 +331,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         risk_end = risk_dates[-1].strftime("%-m/%-d")
         risk_start_en = risk_dates[0].strftime("%b %-d")
         risk_end_en = risk_dates[-1].strftime("%b %-d")
-        max_lt_pct = max(d["highspeed_pct"] for d in long_term)
+        max_lt_pct = max((_effective(d) for d in long_term), default=0)
         long_term_summary = {
             "has_risk": True,
             "risk_period": f"{risk_start}〜{risk_end}頃",
@@ -325,7 +340,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
             "days": long_term,
         }
     else:
-        max_lt_pct = max((d["highspeed_pct"] for d in long_term), default=0)
+        max_lt_pct = max((_effective(d) for d in long_term), default=0)
         # 長期期間の英語表記（懸念なし時も先頭〜末尾の日付を使う）
         if long_term:
             lt_start = datetime.strptime(long_term[0]["date"], "%Y-%m-%d")
@@ -659,17 +674,24 @@ def make_image_longterm(forecast, output_path):
         draw.text((540, 308), lt["risk_period_en"], font=f["head_en"], fill="rgba(255,255,255,180)", anchor="mm")
         draw.line([(80,328),(1000,328)], fill="rgba(255,255,255,70)", width=1)
 
-        # 高速船・フェリー最大%を横並び
-        hs_max = max(d["highspeed_pct"] for d in lt["days"])
-        fe_max = max(d["ferry_pct"] for d in lt["days"])
+        # 高速船・フェリー最大% — 運休中の船種は除外する（運休日の天候%は誤解を招くため）
+        hs_running = [d["highspeed_pct"] for d in lt["days"] if not d.get("suspended_highspeed")]
+        fe_running = [d["ferry_pct"]     for d in lt["days"] if not d.get("suspended_ferry")]
+        hs_max = max(hs_running) if hs_running else None
+        fe_max = max(fe_running) if fe_running else None
         for x, pct, lja, len_ in [
             (270, hs_max, "高速船", "High Speed Boat"),
             (810, fe_max, "フェリー", "Ferry"),
         ]:
             draw.text((x, 362), lja, font=f["label"], fill="rgba(255,255,255,200)", anchor="mm")
             draw.text((x, 388), len_, font=f["label_en"], fill="rgba(255,255,255,170)", anchor="mm")
-            draw.text((x, 453), f"{pct}%", font=f["pct"], fill="white", anchor="mm")
-            draw.text((x, 500), "最大欠航可能性 / Max Risk", font=f["label_en"], fill="rgba(255,255,255,160)", anchor="mm")
+            if pct is None:
+                # 期間中ずっと運休の船種は%ではなく「全日運休」を表示
+                draw.text((x, 453), "全日運休", font=f["label"], fill="white", anchor="mm")
+                draw.text((x, 500), "Suspended (period)", font=f["label_en"], fill="rgba(255,255,255,160)", anchor="mm")
+            else:
+                draw.text((x, 453), f"{pct}%", font=f["pct"], fill="white", anchor="mm")
+                draw.text((x, 500), "最大欠航可能性 / Max Risk", font=f["label_en"], fill="rgba(255,255,255,160)", anchor="mm")
         draw.line([(540,333),(540,520)], fill="rgba(255,255,255,60)", width=1)
     else:
         draw.text((540, 300), "懸念なし  /  No Significant Risk", font=f["period"], fill="white", anchor="mm")
@@ -900,16 +922,26 @@ def generate_post_text(forecast):
     short = forecast["short_term"]
     lt = forecast["long_term"]
 
+    def _hs_line(d):
+        if d.get('suspended_highspeed'):
+            return f"高速船 運休（{d.get('suspension_reason_ja','ドック入り')}）"
+        return f"高速船欠航リスク {d['highspeed_pct']}%（午前{d['highspeed_am_pct']}% / 午後{d['highspeed_pm_pct']}%）"
+
+    def _fe_line(d):
+        if d.get('suspended_ferry'):
+            return f"フェリー 運休（{d.get('suspension_reason_ja','ドック入り')}）"
+        return f"フェリー欠航リスク {d['ferry_pct']}%"
+
     situation = f"""
 【短期予報】
 明日({short[0]['date_label']}):
-  高速船欠航リスク {short[0]['highspeed_pct']}%（午前{short[0]['highspeed_am_pct']}% / 午後{short[0]['highspeed_pm_pct']}%）
-  フェリー欠航リスク {short[0]['ferry_pct']}%
+  {_hs_line(short[0])}
+  {_fe_line(short[0])}
   気象庁予報: {short[0]['jma_wave'] or 'なし'}
 
 明後日({short[1]['date_label']}):
-  高速船欠航リスク {short[1]['highspeed_pct']}%（午前{short[1]['highspeed_am_pct']}% / 午後{short[1]['highspeed_pm_pct']}%）
-  フェリー欠航リスク {short[1]['ferry_pct']}%
+  {_hs_line(short[1])}
+  {_fe_line(short[1])}
 
 【長期予報（3〜7日先）】
 リスク期間: {lt['risk_period']}
@@ -1263,8 +1295,14 @@ def run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=None, post_
             lt_period_en = lt.get("lt_period_en", "")
 
     # リスクレベル別コメント（** による強調はAI感が出るため使用しない）
-    # 高速船欠航可能性の短期最大値でティアを判定
-    max_hs = max(short[0]['highspeed_pct'], short[1]['highspeed_pct'])
+    # 運航中船種の短期最大%でティアを判定（運休船種の天候%は判定に使わない）
+    # 旧: 高速船%のみ。HSドック期間中はキャプションが画像と矛盾する恐れがあったため修正。
+    def _eff_max(day):
+        cands = []
+        if not day.get('suspended_highspeed'): cands.append(day['highspeed_pct'])
+        if not day.get('suspended_ferry'):     cands.append(day['ferry_pct'])
+        return max(cands) if cands else 0
+    max_hs = max(_eff_max(short[0]), _eff_max(short[1]))
 
     if max_hs <= 10 and not lt['has_risk']:
         # Tier 1: 極低リスク
