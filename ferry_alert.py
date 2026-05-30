@@ -392,17 +392,26 @@ def get_typhoon_forecast(window_days=8):
                 circles.append(((vt_dt - datetime.now(JST)).total_seconds() / 3600, circle_r))
             in_circle = circle_r is not None and dist * 1000 <= circle_r
 
+            # 暴風警報域判定：
+            # stormWarningArea.arc は「当該予報時刻までの累積エンベロープ」を描く
+            # arc列で、過去位置の arc も含む。素朴に全 arc を見ると、台風が遥か
+            # 遠方にある日でも過去 arc に引っかかり「暴風域内」と誤判定する。
+            # 正しい判定は「現時刻の台風中心(part.center)を中心とする arc」のみ。
             storm = part.get("stormWarningArea")
             in_storm = False
             if storm and storm.get("arc"):
+                storm_r = 0
                 for arc in storm["arc"]:
                     try:
                         c, r = arc[0], arc[1]
-                        if _haversine_km(KERAMA_LAT, KERAMA_LON, c[0], c[1]) * 1000 <= r:
-                            in_storm = True
-                            break
+                        # 当該予報点の中心と一致する arc を抽出（=今この瞬間の暴風域）
+                        if abs(c[0] - center[0]) < 0.05 and abs(c[1] - center[1]) < 0.05:
+                            if r > storm_r:
+                                storm_r = r
                     except (IndexError, TypeError):
                         continue
+                if storm_r and dist * 1000 <= storm_r:
+                    in_storm = True
 
             if in_storm:
                 tier, hs, fe = 1, 95, 85
