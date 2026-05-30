@@ -835,16 +835,16 @@ def make_image_weather_data(forecast, output_path):
         for d in typhoon["days"][:6]:
             # 値（右側）：暴風域・予報円・外挿の別 ＋ 中心距離
             if d.get("extrapolated"):
-                value_ja = f"進路外挿（参考）中心{d['dist_km']}km"
+                value_ja = f"進路外挿（参考）中心からの距離 {d['dist_km']}km"
                 value_en = f"Extrapolated, {d['dist_km']}km from center"
             elif d["in_storm"]:
-                value_ja = f"暴風警報域内 中心{d['dist_km']}km"
+                value_ja = f"暴風警報域内 中心からの距離 {d['dist_km']}km"
                 value_en = f"In storm area, {d['dist_km']}km from center"
             elif d["in_circle"]:
-                value_ja = f"予報円内 中心{d['dist_km']}km"
+                value_ja = f"予報円内 中心からの距離 {d['dist_km']}km"
                 value_en = f"In forecast circle, {d['dist_km']}km from center"
             else:
-                value_ja = f"中心{d['dist_km']}km"
+                value_ja = f"中心からの距離 {d['dist_km']}km"
                 value_en = f"{d['dist_km']}km from center"
             # 項目（左側）：日付
             draw.text((80,  y),    f"・{d['date_label']}",
