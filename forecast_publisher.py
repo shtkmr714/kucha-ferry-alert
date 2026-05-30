@@ -833,21 +833,27 @@ def make_image_weather_data(forecast, output_path):
         draw.text((919, y+21), "進路予報 JMA Track", font=f["badge_sm"], fill="white", anchor="mm")
         y += 56
         for d in typhoon["days"][:6]:
+            # 値（右側）：暴風域・予報円・外挿の別 ＋ 中心距離
             if d.get("extrapolated"):
-                area_ja = "進路外挿（参考）"
-                area_en = "Extrapolated (reference)"
+                value_ja = f"進路外挿（参考）中心{d['dist_km']}km"
+                value_en = f"Extrapolated, {d['dist_km']}km from center"
             elif d["in_storm"]:
-                area_ja, area_en = "暴風域内", "In storm area"
+                value_ja = f"暴風警報域内 中心{d['dist_km']}km"
+                value_en = f"In storm area, {d['dist_km']}km from center"
             elif d["in_circle"]:
-                area_ja, area_en = "予報円内", "In forecast circle"
+                value_ja = f"予報円内 中心{d['dist_km']}km"
+                value_en = f"In forecast circle, {d['dist_km']}km from center"
             else:
-                area_ja, area_en = f"中心{d['dist_km']}km", f"{d['dist_km']}km away"
-            draw.text((80, y), f"・{d['date_label']}  {area_ja}（最接近 {d['dist_km']}km）",
+                value_ja = f"中心{d['dist_km']}km"
+                value_en = f"{d['dist_km']}km from center"
+            # 項目（左側）：日付
+            draw.text((80,  y),    f"・{d['date_label']}",
                       font=f["label_ja"], fill="#FFCDD2", anchor="lm")
-            draw.text((1010, y+11), f"欠航フロア 高速船{d['hs_floor']}%/ﾌｪﾘｰ{d['fe_floor']}%",
-                      font=f["value"], fill="#FF8A80", anchor="rm")
-            draw.text((96, y+24), f"  {d['date_label_en']}  {area_en}",
+            draw.text((96,  y+24), f"  {d['date_label_en']}",
                       font=f["label_en"], fill="#EF9A9A", anchor="lm")
+            # 値（右側）：状態 ＋ 中心距離
+            draw.text((1010, y),    value_ja, font=f["value"], fill="white",  anchor="rm")
+            draw.text((1010, y+24), value_en, font=f["label_en"], fill="#FFCDD2", anchor="rm")
             y += 52
         y += 6
         draw.line([(60, y),(1020, y)], fill="#334E7A", width=1)
