@@ -118,6 +118,22 @@ def hex_to_rgb(hex_color):
     h = hex_color.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
+
+def effective_max_pct(day):
+    """その日の「運航中船種の欠航%の最大値」を返す。
+    運休（公式決定）船種は天候由来%を持っていても判定から除外する。
+    両方とも運休なら 0 を返す（運休＝天候リスクと別軸）。
+
+    背景色・コメントtier・13時投稿判定・risk_dates 等、
+    船種運休を反映すべき集約計算は全てこの関数に集約する。
+    """
+    cands = []
+    if not day.get("suspended_highspeed"):
+        cands.append(day["highspeed_pct"])
+    if not day.get("suspended_ferry"):
+        cands.append(day["ferry_pct"])
+    return max(cands) if cands else 0
+
 DISCLAIMER_JA = "※本予測はAIによる参考値です。公式情報は座間味村HPをご確認ください。"
 DISCLAIMER_EN = "*AI-based estimate. Check official Zamami Village website for confirmed schedules."
 
@@ -311,19 +327,8 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
             })
             # 運休中の船種は欠航リスク判定から除外する
             # （その日は天候によらず運休なので、運航中の船種の%で判定する）
-            eff_pcts = []
-            if not sus_hs: eff_pcts.append(hs_pct)
-            if not sus_fe: eff_pcts.append(fe_pct)
-            eff_pct = max(eff_pcts) if eff_pcts else 0
-            if eff_pct >= 31:
+            if effective_max_pct(long_term[-1]) >= 31:
                 risk_dates.append(dt)
-
-    # 長期内の各日の「運航中船種の最大%」を算出（運休船種は除外）
-    def _effective(d):
-        cands = []
-        if not d.get("suspended_highspeed"): cands.append(d["highspeed_pct"])
-        if not d.get("suspended_ferry"):     cands.append(d["ferry_pct"])
-        return max(cands) if cands else 0
 
     # 長期リスク期間のサマリー
     if risk_dates:
@@ -331,7 +336,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         risk_end = risk_dates[-1].strftime("%-m/%-d")
         risk_start_en = risk_dates[0].strftime("%b %-d")
         risk_end_en = risk_dates[-1].strftime("%b %-d")
-        max_lt_pct = max((_effective(d) for d in long_term), default=0)
+        max_lt_pct = max((effective_max_pct(d) for d in long_term), default=0)
         long_term_summary = {
             "has_risk": True,
             "risk_period": f"{risk_start}〜{risk_end}頃",
@@ -340,7 +345,7 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
             "days": long_term,
         }
     else:
-        max_lt_pct = max((_effective(d) for d in long_term), default=0)
+        max_lt_pct = max((effective_max_pct(d) for d in long_term), default=0)
         # 長期期間の英語表記（懸念なし時も先頭〜末尾の日付を使う）
         if long_term:
             lt_start = datetime.strptime(long_term[0]["date"], "%Y-%m-%d")
@@ -482,16 +487,9 @@ def make_image_short(forecast, output_path):
     """画像②: 短期予報（船種別計画運休対応版）"""
     short = forecast["short_term"]
 
-    # 背景色: AI予測対象（運休でない船種）の最大リスクで決定
-    # 高速船が全運休でもフェリーが運航していればフェリー%で色を決める（逆も同様）。
-    # 両方とも全運休の場合のみフォールバック値を使う。
-    normal_pcts = []
-    for d in short:
-        if not d.get("suspended_highspeed"):
-            normal_pcts.append(d["highspeed_pct"])
-        if not d.get("suspended_ferry"):
-            normal_pcts.append(d["ferry_pct"])
-    max_pct = max(normal_pcts) if normal_pcts else 10
+    # 背景色: AI予測対象（運休でない船種）の最大リスクで決定（effective_max_pct）。
+    # 両方とも全運休の場合のみフォールバック10（緑）。
+    max_pct = max((effective_max_pct(d) for d in short), default=10)
     bg = hex_to_rgb(get_bg_color(max_pct))
 
     img = Image.new("RGB", IMG_SIZE, color=bg)
@@ -1295,14 +1293,8 @@ def run_publisher(analysis, jma_waves, jma_prob, planned_suspensions=None, post_
             lt_period_en = lt.get("lt_period_en", "")
 
     # リスクレベル別コメント（** による強調はAI感が出るため使用しない）
-    # 運航中船種の短期最大%でティアを判定（運休船種の天候%は判定に使わない）
-    # 旧: 高速船%のみ。HSドック期間中はキャプションが画像と矛盾する恐れがあったため修正。
-    def _eff_max(day):
-        cands = []
-        if not day.get('suspended_highspeed'): cands.append(day['highspeed_pct'])
-        if not day.get('suspended_ferry'):     cands.append(day['ferry_pct'])
-        return max(cands) if cands else 0
-    max_hs = max(_eff_max(short[0]), _eff_max(short[1]))
+    # 運航中船種の短期最大%でティアを判定（effective_max_pct に集約）
+    max_hs = max(effective_max_pct(short[0]), effective_max_pct(short[1]))
 
     if max_hs <= 10 and not lt['has_risk']:
         # Tier 1: 極低リスク

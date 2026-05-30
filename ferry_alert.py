@@ -1179,13 +1179,9 @@ def run_ferry_check():
     is_afternoon_run = now.hour >= 12
     if is_afternoon_run and _fc is not None:
         _short = _fc["short_term"]
-        # 運航中船種の最大%で判定（運休船種は除外）。HSドック期間中の誤スキップを防ぐ。
-        def _eff_max(day):
-            c = []
-            if not day.get('suspended_highspeed'): c.append(day['highspeed_pct'])
-            if not day.get('suspended_ferry'):     c.append(day['ferry_pct'])
-            return max(c) if c else 0
-        max_hs = max(_eff_max(_short[0]), _eff_max(_short[1]))
+        # 運航中船種の最大%で判定（運休船種は除外）。effective_max_pct に集約。
+        from forecast_publisher import effective_max_pct
+        max_hs = max(effective_max_pct(_short[0]), effective_max_pct(_short[1]))
         high_risk = max_hs >= 61
 
         # スプシから当日の欠航理由を確認（equipment/dockは対象外）
