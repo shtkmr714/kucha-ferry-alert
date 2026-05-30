@@ -1173,8 +1173,8 @@ def run_ferry_check():
     except Exception as e:
         print(f"  [警告] DB記録エラー: {e}")
 
-    # 13:00台は欠航リスクが高い場合のみInstagram投稿
-    # 条件①: 明日 or 明後日の高速船欠航確率が61%以上
+    # 午後便（14:30 JST cron／旧13:00）は欠航リスクが高い場合のみInstagram投稿
+    # 条件①: 明日 or 明後日の運航中船種の欠航確率が61%以上
     # 条件②: 当日便が気象理由で欠航（Google Sheetsの8:15記録を参照・weatherのみ対象）
     is_afternoon_run = now.hour >= 12
     if is_afternoon_run and _fc is not None:
@@ -1212,7 +1212,7 @@ def run_ferry_check():
                         (_fe_cancel and _fc_reason == "weather") or
                         (_hs_cancel and _hs_reason == "weather")
                     )
-                    print(f"  [13時台] スプシ確認: フェリー={_today_rec.get('ferry_operated')}({_fc_reason}) "
+                    print(f"  [午後便] スプシ確認: フェリー={_today_rec.get('ferry_operated')}({_fc_reason}) "
                           f"高速船1便={_today_rec.get('hs_bin1_operated')}({_hs_reason})")
         except Exception as e:
             print(f"  [警告] スプシ欠航確認エラー（スキップ）: {e}")
@@ -1222,9 +1222,9 @@ def run_ferry_check():
         if high_risk:              reason.append(f"高速船リスク最大{max_hs}% ≥ 61%")
         if actual_weather_cancel:  reason.append("当日便が気象欠航")
         if post_to_social:
-            print(f"  [13時台] Instagram投稿あり（{' / '.join(reason)}）")
+            print(f"  [午後便] Instagram投稿あり（{' / '.join(reason)}）")
         else:
-            print(f"  [13時台] 高速船リスク最大{max_hs}% < 61% かつ気象欠航なし → Instagram投稿スキップ")
+            print(f"  [午後便] 高速船リスク最大{max_hs}% < 61% かつ気象欠航なし → Instagram投稿スキップ")
     else:
         post_to_social = True  # 8:15は常に投稿 / _fc取得失敗時は安全側（投稿する）
 
