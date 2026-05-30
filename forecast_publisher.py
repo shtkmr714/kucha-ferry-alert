@@ -467,8 +467,15 @@ def make_image_short(forecast, output_path):
     """画像②: 短期予報（船種別計画運休対応版）"""
     short = forecast["short_term"]
 
-    # 背景色: AI予測対象（運休でない）の最大リスクで決定
-    normal_pcts = [d["highspeed_pct"] for d in short if not d.get("suspended_highspeed")]
+    # 背景色: AI予測対象（運休でない船種）の最大リスクで決定
+    # 高速船が全運休でもフェリーが運航していればフェリー%で色を決める（逆も同様）。
+    # 両方とも全運休の場合のみフォールバック値を使う。
+    normal_pcts = []
+    for d in short:
+        if not d.get("suspended_highspeed"):
+            normal_pcts.append(d["highspeed_pct"])
+        if not d.get("suspended_ferry"):
+            normal_pcts.append(d["ferry_pct"])
     max_pct = max(normal_pcts) if normal_pcts else 10
     bg = hex_to_rgb(get_bg_color(max_pct))
 
