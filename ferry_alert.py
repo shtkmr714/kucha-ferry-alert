@@ -414,7 +414,9 @@ def get_typhoon_forecast(window_days=8):
                     in_storm = True
 
             if in_storm:
-                tier, hs, fe = 1, 95, 85
+                # tier1（暴風警報域内）: 実態として欠航ほぼ確実なため
+                # フェリーフロアも高速船と同水準(95)に設定
+                tier, hs, fe = 1, 95, 95
             elif in_circle and storm:
                 tier, hs, fe = 2, 80, 60
             elif in_circle:

@@ -160,15 +160,15 @@ def score_to_pct_highspeed(score):
 def score_to_pct_ferry(score):
     """
     フェリー欠航可能性%に変換。
-    感覚値ベース:
+    変曲点 0.52（旧 0.58 → 台風レンジでも86%止まりで実態より低い問題を是正）。
+    新感覚値:
       波1m・風5m/s  (score≈0.16) → 2%
-      波2m・風10m/s (score≈0.31) → 5%
-      波3m・風15m/s (score≈0.51) → 38%
-      波4m・風18m/s (score≈0.65) → 78%（欠航ライン・文脈依存）
-      波5m+          (score≈0.80) → 97%
-    フェリーは変曲点を高めに・緩やかに上昇。
+      波2m・風10m/s (score≈0.31) → 8%
+      波3m・風15m/s (score≈0.51) → 49%
+      波4m・風18m/s (score≈0.65) → 83%
+      波5m+          (score≈0.73) → 93%（暴風域内なら更にフロア95で確定）
     """
-    inflection = 0.58
+    inflection = 0.52
     steepness  = 12.0
     pct = 100 / (1 + math.exp(-steepness * (score - inflection)))
     return round(min(max(pct, 1), 99))
