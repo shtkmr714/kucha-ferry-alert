@@ -1,0 +1,40 @@
+name: Dispatch Tokashiki & Yaeyama
+
+# kucha-ferry-alert（座間味）が cron-job.org から workflow_dispatch で起動された直後に
+# 渡嘉敷・八重山のワークフローも同じタイミングで dispatch する。
+#
+# ポイント:
+#   - workflow_run は "Kucha Ferry Alert" の完了後にのみ発火
+#   - if 条件で event == 'workflow_dispatch' に絞り込むことで
+#     GitHub Actions cron による遅延実行時には発火しない
+#   - 渡嘉敷・八重山側の時刻ガードは workflow_dispatch を許可しているため問題なし
+
+on:
+  workflow_run:
+    workflows: ["Kucha Ferry Alert"]
+    types: [completed]
+
+jobs:
+  dispatch:
+    if: github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Dispatch Tokashiki Ferry Logger
+        run: |
+          curl -s -o /dev/null -w "Tokashiki: HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: token ${{ secrets.DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d '{"ref":"main"}' \
+            https://api.github.com/repos/shtkmr714/tokashiki-logger/actions/workflows/280848344/dispatches
+
+      - name: Dispatch Yaeyama All-Routes Logger
+        run: |
+          curl -s -o /dev/null -w "Yaeyama: HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: token ${{ secrets.DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d '{"ref":"main"}' \
+            https://api.github.com/repos/shtkmr714/yaeyama-all-routes-logger/actions/workflows/280839269/dispatches
