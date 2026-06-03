@@ -1184,15 +1184,19 @@ def run_ferry_check():
     except Exception as e:
         print(f"  [警告] DB記録エラー: {e}")
 
-    # 午後便（14:30 JST cron／旧13:00）は欠航リスクが高い場合のみInstagram投稿
-    # 条件①: 明日 or 明後日の運航中船種の欠航確率が61%以上
+    # 午後便（14:30 JST cron）は欠航リスクが高い場合のみInstagram投稿
+    # 条件①: 短期（明日・明後日）+ 長期（3〜7日先）全期間の最大値が61%以上
     # 条件②: 当日便が気象理由で欠航（Google Sheetsの8:15記録を参照・weatherのみ対象）
     is_afternoon_run = now.hour >= 12
     if is_afternoon_run and _fc is not None:
         _short = _fc["short_term"]
-        # 運航中船種の最大%で判定（運休船種は除外）。effective_max_pct に集約。
+        _lt_days = _fc.get("long_term", {}).get("days", [])
+        # 運航中船種の最大%で判定（運休船種は除外）。全期間（短期＋長期）を対象とする。
         from forecast_publisher import effective_max_pct
-        max_hs = max(effective_max_pct(_short[0]), effective_max_pct(_short[1]))
+        max_hs = max(
+            [effective_max_pct(d) for d in _short] +
+            [max(d.get("highspeed_pct", 0), d.get("ferry_pct", 0)) for d in _lt_days]
+        ) if (_short or _lt_days) else 0
         high_risk = max_hs >= 61
 
         # スプシから当日の欠航理由を確認（equipment/dockは対象外）
@@ -1235,7 +1239,7 @@ def run_ferry_check():
         if post_to_social:
             print(f"  [午後便] Instagram投稿あり（{' / '.join(reason)}）")
         else:
-            print(f"  [午後便] 高速船リスク最大{max_hs}% < 61% かつ気象欠航なし → Instagram投稿スキップ")
+            print(f"  [午後便] 全期間最大リスク{max_hs}% < 61% かつ気象欠航なし → Instagram投稿スキップ")
     else:
         post_to_social = True  # 8:15は常に投稿 / _fc取得失敗時は安全側（投稿する）
 
