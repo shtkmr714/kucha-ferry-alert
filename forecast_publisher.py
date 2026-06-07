@@ -424,6 +424,8 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         "planned_suspensions": [
             sus for sus in (planned_suspensions or [])
             if sus.get("start") and sus.get("end")
+            # 期限切れチェック: end が今日以降のものだけ表示
+            and datetime.strptime(sus["end"], "%Y-%m-%d").date() >= now.date()
         ],
     }
 
