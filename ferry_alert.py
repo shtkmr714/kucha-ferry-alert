@@ -1096,83 +1096,7 @@ def run_ferry_check():
             })
     long_risk = len(long_risk_days) > 0
 
-    # ---- Slackメッセージ構築（短期＋長期を1通に） ----
-    print("\n[4] Slackメッセージ構築中...")
-
-    ferry_status = get_ferry_status_from_web()
-
-    # 短期セクション
-    short_section = f"""[{now.strftime('%m/%d %H:%M')}] Kucha フェリー予報
-
-[明日] {risk_label(tomorrow_data, tomorrow_morning, tomorrow_afternoon)}
-  気象庁: {jma_waves.get('明日', '未取得')}
-  早期注意(波浪): {jma_prob.get('明日', {}).get('level', 'なし') or 'なし'}
-
-[明後日] {risk_label(day_after_data)}
-  気象庁: {jma_waves.get('明後日', '未取得')}
-  早期注意(波浪): {jma_prob.get('明後日', {}).get('level', 'なし') or 'なし'}
-
-[注意報] {'あり(!!)' if warnings else 'なし'}
-[運航情報] {ferry_status[:60] if ferry_status else '未確認（8時以降に再確認）'}"""
-
-    # 長期セクション
-    if long_risk:
-        risk_summary = " / ".join([f"{d['date_label']}波{d['max_wave']}m" for d in long_risk_days])
-        long_section = f"""
---- 長期予報（3〜7日先）---
-[懸念日] {risk_summary}
-[早期注意] 明日:{jma_prob.get('明日',{}).get('level','なし')} / 明後日:{jma_prob.get('明後日',{}).get('level','なし')}"""
-    else:
-        long_section = "\n--- 長期予報（3〜7日先）---\n[長期] 懸念なし"
-
-    # メッセージ生成（リスクありの場合のみ）
-    message_section = ""
-    if short_risk:
-        print("  短期リスクあり → メッセージ生成中...")
-        try:
-            short_message = generate_shortterm_message(analysis, ferry_status, warnings)
-            message_section += f"\n--- ゲスト向けメッセージ案（短期）---\n{short_message[:800]}"
-        except Exception as e:
-            print(f"  [警告] 短期メッセージ生成失敗: {e}")
-
-    if long_risk:
-        print("  長期リスクあり → メッセージ生成中...")
-        try:
-            result = generate_longterm_message(analysis, warnings)
-            if result:
-                long_message, _ = result
-                message_section += f"\n--- ゲスト向けメッセージ案（長期）---\n{long_message[:800]}"
-        except Exception as e:
-            print(f"  [警告] 長期メッセージ生成失敗: {e}")
-
-    # 台風セクション（活動中かつ慶良間に影響がある場合のみ）
-    typhoon_section = ""
-    if typhoon_by_date:
-        tcnames = sorted({t["name_ja"] for t in typhoon_by_date.values()})
-        lines = [f"\n--- 台風情報 ---", f"[台風] {' / '.join(tcnames)} 接近予報あり"]
-        for _d in sorted(typhoon_by_date):
-            _t = typhoon_by_date[_d]
-            dt = datetime.strptime(_d, "%Y-%m-%d")
-            if _t.get("extrapolated"):
-                area = "進路外挿(参考)"
-            elif _t["in_storm"]:
-                area = "暴風域内"
-            elif _t["in_circle"]:
-                area = "予報円内"
-            else:
-                area = f"中心{_t['dist_km']}km"
-            lines.append(
-                f"  {dt.strftime('%-m/%-d')}: {area}（最接近{_t['dist_km']}km）"
-                f" → 欠航フロア 高速船{_t['hs_floor']}%/フェリー{_t['fe_floor']}%"
-            )
-        typhoon_section = "\n".join(lines)
-
-    # 1通にまとめて送信
-    full_message = short_section + typhoon_section + long_section + message_section
-    send_slack(full_message, emoji="")
-    print("  ✅ Slack送信完了")
-
-    # [DB] 日次運航記録（Google Sheets蓄積）
+    # [DB] 日次運航記録 + forecast data 構築（Slack・Instagram 両方で使う）
     print("\n[DB] 日次運航データ記録中...")
     _fc = None
     try:
@@ -1183,6 +1107,52 @@ def run_ferry_check():
         log_daily_record(analysis, jma_waves, jma_prob, _fc)
     except Exception as e:
         print(f"  [警告] DB記録エラー: {e}")
+
+    # ---- Slack アラート（欠航リスク61%以上の場合のみ）----
+    SLACK_ALERT_THRESHOLD = 61
+    print(f"\n[4] Slack アラート判定中（閾値: {SLACK_ALERT_THRESHOLD}%以上）...")
+
+    if _fc is not None:
+        from forecast_publisher import effective_max_pct
+        _short   = _fc["short_term"]
+        _lt      = _fc["long_term"]
+        _lt_days = _lt.get("days", [])
+
+        # 短期＋長期全期間の最大%
+        _max_all = max(
+            [effective_max_pct(d) for d in _short] +
+            [max(d.get("highspeed_pct", 0), d.get("ferry_pct", 0)) for d in _lt_days]
+        ) if (_short or _lt_days) else 0
+
+        if _max_all < SLACK_ALERT_THRESHOLD:
+            print(f"  [Slack スキップ] 全期間最大リスク {_max_all}% < {SLACK_ALERT_THRESHOLD}%")
+        else:
+            DAY_JA = ["（月）","（火）","（水）","（木）","（金）","（土）","（日）"]
+            lines  = [
+                f"🚨 欠航リスクアラート【座間味航路】{now.strftime('%-m/%-d %H:%M')}更新",
+                "",
+            ]
+            for d in _short:
+                dt       = datetime.strptime(d["date"], "%Y-%m-%d")
+                max_pct  = effective_max_pct(d)
+                icon     = "🔴" if max_pct >= 81 else ("🟠" if max_pct >= 61 else "🟡")
+                hs_str   = f"高速船 {d['highspeed_pct']}%" if not d.get("suspended_highspeed") else "高速船 運休"
+                fe_str   = f"フェリー {d['ferry_pct']}%"   if not d.get("suspended_ferry")     else "フェリー 運休"
+                lines.append(f"{icon} {d['label_ja']} {dt.strftime('%-m/%-d')}{DAY_JA[dt.weekday()]}")
+                lines.append(f"  {hs_str}  /  {fe_str}")
+            lines.append("")
+            if _lt["has_risk"]:
+                lines.append(f"📅 長期（3〜7日先）  最大 {_lt['max_pct']}%  {_lt['risk_period']}")
+            else:
+                lines.append(f"📅 長期（3〜7日先）  懸念なし（最大 {_lt['max_pct']}%）")
+            if typhoon_by_date:
+                tcnames = sorted({t["name_ja"] for t in typhoon_by_date.values()})
+                lines.append(f"🌀 台風 {' / '.join(tcnames)} 接近予報あり")
+            lines += ["", "⚠️ AI予測・参考値"]
+            send_slack("\n".join(lines), emoji="")
+            print(f"  ✅ Slack アラート送信（最大リスク {_max_all}%）")
+    else:
+        print("  [Slack スキップ] forecast data 未取得")
 
     # 午後便（14:30 JST cron）は欠航リスクが高い場合のみInstagram投稿
     # 条件①: 短期（明日・明後日）+ 長期（3〜7日先）全期間の最大値が61%以上
