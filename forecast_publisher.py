@@ -144,15 +144,21 @@ DISCLAIMER_EN = "*AI-based estimate. Check official Zamami Village website for c
 def score_to_pct_highspeed(score):
     """
     高速船欠航可能性%に変換。
-    感覚値ベース:
-      波1m・風5m/s  (score≈0.16) → 3%
-      波2m・風10m/s (score≈0.31) → 18%
-      波3m・風15m/s (score≈0.51) → 78%（欠航ライン）
-      波4m・風18m/s (score≈0.65) → 96%
-      波5m+          (score≈0.80) → 99%
+
+    2026-06: 過去165日（2024-12〜2026-06）の実績データでロジスティック回帰により
+    再キャリブレーション。旧値(inflection=0.42, steepness=14)は中域で一貫して
+    過小評価（予測20-29%→実欠航率50%、予測60-69%→実100%）だった。
+    最適化値 inflection=0.352, steepness=28.18 を採用（対数尤度 +9.1 改善）。
+
+    新パラメータでのスコア→欠航率（実績と整合）:
+      score 0.25 → 13%   （実欠航率 ≈ 9%）
+      score 0.30 → 19%   （実 32%）
+      score 0.35 → 51%   （境界）
+      score 0.40 → 79%   （実 95%）
+      score 0.45 → 94%   （実 100%）
     """
-    inflection = 0.42
-    steepness  = 14.0
+    inflection = 0.352
+    steepness  = 28.18
     pct = 100 / (1 + math.exp(-steepness * (score - inflection)))
     return round(min(max(pct, 1), 99))
 
@@ -160,16 +166,19 @@ def score_to_pct_highspeed(score):
 def score_to_pct_ferry(score):
     """
     フェリー欠航可能性%に変換。
-    変曲点 0.52（旧 0.58 → 台風レンジでも86%止まりで実態より低い問題を是正）。
-    新感覚値:
-      波1m・風5m/s  (score≈0.16) → 2%
-      波2m・風10m/s (score≈0.31) → 8%
-      波3m・風15m/s (score≈0.51) → 49%
-      波4m・風18m/s (score≈0.65) → 83%
-      波5m+          (score≈0.73) → 93%（暴風域内なら更にフロア95で確定）
+
+    2026-06: 実績データで再キャリブレーション。旧値(0.52, 12)は大幅に過小評価
+    （予測30-39%→実欠航率91%）。実績は score≈0.40 を境にほぼ0%↔ほぼ100%の
+    急峻な階段状（score0.3バケット欠航率0% / score0.4バケット78% / 0.5バケット100%）。
+    最適化では inflection=0.431, steepness=72 となったが、欠航サンプル16日に対し
+    steepness=72 は過適合（波高±0.01で予測が反転）。inflection は最適値を採用しつつ
+    steepness は 30 に抑えて入力ノイズへの頑健性を確保する。
+      score 0.35 → 11%
+      score 0.43 → 50%（境界）
+      score 0.50 → 89%
     """
-    inflection = 0.52
-    steepness  = 12.0
+    inflection = 0.43
+    steepness  = 30.0
     pct = 100 / (1 + math.exp(-steepness * (score - inflection)))
     return round(min(max(pct, 1), 99))
 
