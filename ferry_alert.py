@@ -263,7 +263,9 @@ def get_jma_probability():
                     for i, time_str in enumerate(time_defines):
                         dt = datetime.fromisoformat(time_str)
                         delta = (dt.date() - datetime.now(JST).date()).days
-                        label = {1: "明日", 2: "明後日"}.get(delta)
+                        # 早期注意情報は通常「明日」以降の予報だが、APIが「今日」を
+                        # 含む場合に取りこぼさないよう delta=0 も拾う。
+                        label = {0: "今日", 1: "明日", 2: "明後日"}.get(delta)
                         if not label:
                             continue
                         for prop in area.get("properties", []):
@@ -1104,7 +1106,7 @@ def run_ferry_check():
         from forecast_publisher import build_forecast_data
         _fc = build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions,
                                   typhoon_by_date=typhoon_by_date)
-        log_daily_record(analysis, jma_waves, jma_prob, _fc)
+        log_daily_record(analysis, jma_waves, jma_prob, _fc, warnings=warnings)
     except Exception as e:
         print(f"  [警告] DB記録エラー: {e}")
 

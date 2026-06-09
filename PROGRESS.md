@@ -1,6 +1,26 @@
 # Ferry Forecast — 作業進捗メモ
 
-最終更新：2026年5月11日
+最終更新：2026年6月9日
+
+---
+
+## ⚠️ 重要：データ系統の不連続（精度検証の前提）
+
+`daily_operation_log`（座間味）は、取得ロジックの変更により **3つの期間でデータ仕様が異なる**。
+**期間をまたいだ Apple-to-Apple の精度比較・モデル学習はできない**ため、分析時は必ず期間を区切ること。
+
+| 期間 | 取得方法 | 主な特徴 |
+|---|---|---|
+| **〜2026/5/9** | **手入力中心** | `announcement_text` 等を手動記入。運航実績は正確だが気象列の粒度・基準が自動期と異なる。約81%で `announcement_text` 空欄（=手入力期は別ソース）。 |
+| **2026/5/10〜2026/6/9** | 自動取得（不完全） | スクレイプ＋API自動記録。ただし下記フィールドが**バグで常時空欄/誤値**：<br>・`swell_period` / `swell_direction` / `wind_direction_am` / `precip_am` / `precip_total`（ロガーがハードコード `""`）<br>・`jma_warning_today`（早期注意情報に「今日」がなく常時「なし」）<br>・`typhoon_active` / `typhoon_distance_km` / `typhoon_category` / `typhoon_max_wind`（誤ったAPI `list.json` を参照し常時0/空） |
+| **2026/6/9〜（本修正後）** | 自動取得（修正済み） | 上記フィールドを実値で記録：<br>・気象列は `analyze_period()` の算出値を反映<br>・`jma_warning_today` は実警報API（`warning/471000.json`）から生成<br>・台風列は `targetTc.json`→`{tcid}/forecast.json` から取得 |
+
+**含意：**
+- モデル学習・キャリブレーションは原則 **2026/6/9 以降の自動期（修正後）** のデータで行う。
+- それ以前を使う場合は `wave_max` / `wind_max` / 運航実績（`hs_bin*` / `ferry_operated`）など**全期間で一貫している列のみ**を使う。
+- `jma_warning_*` / `typhoon_*` / `swell_period` 等は **6/9以降のみ有効**。
+
+> 修正コミット: operation_logger.py（空欄フィールド実値化・台風API修正）, ferry_alert.py（get_jma_probability の delta マッピング拡張・warnings 受け渡し）
 
 ---
 
@@ -70,6 +90,66 @@
 - スプレッドシートへの記録成功（`daily_operation_log`・`daily_forecast`）
 - `ferry_operated`・`hs_bin1/2/3_operated`・`ferry_cancel_reason` 正常取得
 - 重複チェック（8:15以降の2回目実行でスキップ）動作確認
+
+---
+
+## ✅ 完了：投稿UI・投稿頻度の改善（2026-05-20）
+
+### ① 表紙削除・3枚構成
+- ヘッダー画像（img①）を廃止。短期予報を1枚目にすることでフィードで即座に内容が伝わるように
+- 短期予報（新1枚目）のタイトルを刷新：
+  - 「座間味島・阿嘉島」サイズ50・白
+  - 「フェリー欠航予測」同サイズ・同色（白）
+  - 英語サブタイトル「Zamami / Aka  Ferry Cancellation Risk」サイズ28（"Forecast"→"Risk"に変更：%が欠航確率であることを明確化）
+- 画像枚数: 4枚 → 3枚（short / longterm / weatherdata）
+
+### ② 13:00台の投稿を高リスク時のみに限定
+- **8:15**: 常にInstagram投稿
+- **13:00**: 以下いずれかを満たす場合のみ投稿、それ以外はスキップ
+  - 明日 or 明後日の高速船欠航確率 ≥ 61%（オレンジゾーン以上）
+  - 当日便が気象理由で欠航（Google Sheetsの8:15記録から取得・`weather`のみ対象、`dock`/`equipment`は除外）
+- 欠航理由の種類: `weather`（気象）/ `equipment`（機材トラブル）/ `dock`（ドック入り）/ `none`（通常運航）
+
+### GitHubコミット
+| コミット | 内容 |
+|---|---|
+| `08b7544` | 表紙削除3枚構成・13時台高リスク時のみ投稿 |
+| `90b83ab` | 13時台投稿条件に当日便気象欠航を追加 |
+| `eff079b` | タイトル白統一・欠航判定をスプシ+weather限定に |
+| `9a91b82` | 英語サブタイトルを "Ferry Cancellation Risk" に変更 |
+
+---
+
+## ✅ 完了：計画運休機能の実装（2026-05-20）
+
+### 概要
+ドック入り等の計画運休情報をInstagram投稿（画像・キャプション）に自動反映する機能を追加。
+
+### 仕組み
+1. **自動取得**：座間味村HPトップページ（https://www.vill.zamami.okinawa.jp/）を BeautifulSoup でスクレイプ → Claude API で構造化データ抽出
+2. **手動補足**：`planned_suspensions.json` に手動でエントリ追加可能（HPに掲載前の情報など）
+3. **齟齬検出**：両ソースを照合し、食い違いがあれば Slack アラート送信
+   - HP照合は開始日まで10日以内の運休のみ対象（先々の予定はHP未掲載が正常なため）
+4. **画像反映**：
+   - img②短期予報：運休サービスのみグレーパネル（#7B96A4）＋「公式発表」バッジ＋「運休 / Suspended」
+   - img③長期予報：斜線ハッチ＋「運休 / Suspended」表示
+   - img④気象データ：上部に計画運休セクション挿入（緑系カラー）
+5. **キャプション反映**：日本語・英語両セクションに運休情報を記載
+
+### 新規ファイル
+- `planned_suspensions.json`：手動入力用JSON（現在：5/27-6/5 クイーンざまみ ドック入りのエントリあり）
+
+### 変更ファイル
+- `ferry_alert.py`：`get_planned_suspensions()` 他4関数追加、`run_ferry_check()` に組み込み
+- `forecast_publisher.py`：`_is_date_suspended()` / `_fmt_wave()` / `_fmt_prob()` 追加、各画像生成関数を修正
+
+### GitHubコミット
+| コミット | 内容 |
+|---|---|
+| `9c37d27` | 計画運休機能の実装（メイン） |
+| `bb36aa6` | ferry_alert.py 関数重複の削除 |
+| `709f71d` | CTOレビュー指摘3件修正（二重呼び出し・service_ja未定義・HP未掲載検出追加） |
+| `63299a2` | HP照合チェックを開始10日以内に限定 |
 
 ---
 

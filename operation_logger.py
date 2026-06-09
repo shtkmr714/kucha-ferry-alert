@@ -162,10 +162,14 @@ def get_typhoon_data():
     戻り値:
     {
         "typhoon_active": 0 or 1,
-        "typhoon_distance_km": float or None,
-        "typhoon_category": str or None,
-        "typhoon_max_wind": float or None,
+        "typhoon_distance_km": float or None,   # 座間味からの現在距離
+        "typhoon_category": str or None,         # 階級（強い/非常に強い 等）
+        "typhoon_max_wind": float or None,       # 最大風速 m/s
     }
+
+    ※ 旧実装は存在しない list.json を叩いて常に台風なし(0)を返していた。
+       ferry_alert.py の get_typhoon_forecast() と同じ targetTc.json →
+       {tcid}/forecast.json 構造に修正（2026-06 バグ修正）。
     """
     result = {
         "typhoon_active": 0,
@@ -175,42 +179,64 @@ def get_typhoon_data():
     }
 
     try:
-        # JMA台風情報リスト
-        list_url = "https://www.jma.go.jp/bosai/typhoon/data/list.json"
-        resp = requests.get(list_url, timeout=10)
-        if resp.status_code != 200:
-            return result
-
-        typhoon_list = resp.json()
-        if not typhoon_list:
+        # 活動中の台風ID一覧（台風なしのときは空配列）
+        idx = requests.get(
+            "https://www.jma.go.jp/bosai/typhoon/data/targetTc.json", timeout=10
+        ).json()
+        if not idx:
             return result  # 台風なし
 
-        # 最も近い（最新の）台風の詳細を取得
         result["typhoon_active"] = 1
-        latest = typhoon_list[0]  # 最新の台風
 
-        # 台風詳細データ取得
-        detail_url = f"https://www.jma.go.jp/bosai/typhoon/data/{latest.get('id', '')}/forecast.json"
-        detail_resp = requests.get(detail_url, timeout=10)
+        # 最も座間味に近い台風の現在位置を探す
+        best_dist = None
+        for tc in idx:
+            tcid = tc.get("tropicalCyclone")
+            if not tcid:
+                continue
+            try:
+                fc = requests.get(
+                    f"https://www.jma.go.jp/bosai/typhoon/data/{tcid}/forecast.json",
+                    timeout=10,
+                ).json()
+            except Exception as e:
+                print(f"  [警告] 台風進路取得エラー {tcid}: {e}")
+                continue
 
-        if detail_resp.status_code == 200:
-            detail = detail_resp.json()
-            # 最新位置を取得
-            positions = detail.get("positions", [])
-            if positions:
-                latest_pos = positions[-1]
-                lat = latest_pos.get("lat")
-                lon = latest_pos.get("lon")
-                if lat and lon:
-                    dist = _haversine(ZAMAMI_LAT, ZAMAMI_LON, lat, lon)
-                    result["typhoon_distance_km"] = round(dist, 0)
+            # part=="Analysis"（現在位置）を優先、なければ center を持つ最初の part
+            analysis_part = None
+            for part in fc:
+                if part.get("part") == "Analysis" and part.get("center"):
+                    analysis_part = part
+                    break
+            if analysis_part is None:
+                for part in fc:
+                    if part.get("center"):
+                        analysis_part = part
+                        break
+            if analysis_part is None:
+                continue
 
-                # 台風強度カテゴリ
-                intensity = latest_pos.get("intensity", "")
-                result["typhoon_category"] = intensity
-                result["typhoon_max_wind"] = latest_pos.get("wind_speed")
+            center = analysis_part["center"]  # [lat, lon]
+            dist = _haversine(ZAMAMI_LAT, ZAMAMI_LON, center[0], center[1])
 
-        print(f"  [台風] アクティブ: {result['typhoon_active']} / 距離: {result['typhoon_distance_km']}km")
+            if best_dist is None or dist < best_dist:
+                best_dist = dist
+                result["typhoon_distance_km"] = round(dist, 0)
+                # 階級・最大風速（キー名はAPIに合わせ複数候補をフォールバック）
+                result["typhoon_category"] = (
+                    analysis_part.get("category")
+                    or analysis_part.get("intensity")
+                    or analysis_part.get("class", "")
+                )
+                mw = (analysis_part.get("maximumWind", {}) or {})
+                result["typhoon_max_wind"] = (
+                    mw.get("speed") if isinstance(mw, dict) else None
+                ) or analysis_part.get("wind_speed")
+
+        print(f"  [台風] アクティブ: {result['typhoon_active']} / "
+              f"距離: {result['typhoon_distance_km']}km / "
+              f"階級: {result['typhoon_category']}")
 
     except Exception as e:
         print(f"  [警告] 台風データ取得エラー: {e}")
@@ -304,10 +330,14 @@ def get_context_vars(analysis, gc, sheets_id):
 # 4. Google Sheets への書き込み
 # ============================================================
 
-def log_daily_record(analysis, jma_waves, jma_prob, forecast):
+def log_daily_record(analysis, jma_waves, jma_prob, forecast, warnings=None):
     """
     メイン関数。全データを収集してGoogle Sheetsに1行追加する。
     ferry_alert.py の run_ferry_check() から呼び出す。
+
+    warnings: get_jma_warnings() の返り値（当日の実警報・注意報リスト）。
+        jma_warning_today は早期注意情報（=明日以降の予報）には含まれないため、
+        当日の警報はこの実警報APIから生成する。
     """
     sheets_id = os.environ.get("GOOGLE_SHEETS_ID")
     service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -382,9 +412,34 @@ def log_daily_record(analysis, jma_waves, jma_prob, forecast):
     )
 
     # --- JMA情報 ---
-    jma_wave_today   = jma_waves.get("今日", "")
+    jma_wave_today    = jma_waves.get("今日", "")
     jma_wave_tomorrow = jma_waves.get("明日", "")
-    jma_warn_today   = jma_prob.get("今日", {}).get("level", "なし")
+
+    # jma_warning_today: 当日の実警報・注意報（warning API）から生成。
+    #   早期注意情報（probability API = jma_prob）は「明日以降」の予報のため
+    #   "今日" は常に空になる。当日の警報はこちらの実警報リストを使う。
+    # JMA警報コード（warning/471000.json の code）→ 表示名（船舶に関係する主要コード）
+    _WARN_CODE = {
+        "02": "暴風雪警報", "03": "大雨警報", "04": "洪水警報", "05": "暴風警報",
+        "06": "大雪警報", "07": "波浪警報", "08": "高潮警報",
+        "10": "大雨注意報", "12": "大雪注意報", "13": "風雪注意報", "14": "雷注意報",
+        "15": "強風注意報", "16": "波浪注意報", "18": "洪水注意報", "19": "高潮注意報",
+        "20": "濃霧注意報", "32": "暴風雪特別警報", "33": "大雨特別警報",
+        "35": "暴風特別警報", "36": "大雪特別警報",
+    }
+    if warnings:
+        names = []
+        for w in warnings:
+            code = str(w.get("type", ""))
+            names.append(_WARN_CODE.get(code, f"コード{code}"))
+        # 重複除去・順序維持
+        seen = set()
+        uniq = [n for n in names if not (n in seen or seen.add(n))]
+        jma_warn_today = " / ".join(uniq) if uniq else "なし"
+    else:
+        jma_warn_today = "なし"
+
+    # jma_warning_tomorrow: 早期注意情報（警報級確率: 高/中/なし）
     jma_warn_tomorrow = jma_prob.get("明日", {}).get("level", "なし")
 
     # --- モデル予測値（forecast から取得）---
@@ -416,16 +471,16 @@ def log_daily_record(analysis, jma_waves, jma_prob, forecast):
         afternoon.get("max_wave", ""),                      # wave_pm
         all_day.get("max_wave", ""),                        # wave_max
         all_day.get("max_swell", ""),                       # swell_height
-        "",                                                 # swell_period（未取得）
-        "",                                                 # swell_direction（未取得）
+        all_day.get("max_swell_period", ""),                # swell_period（analyze_periodで取得済み）
+        all_day.get("wave_direction", ""),                  # swell_direction（波向で代用・うねり単独の向きは未算出）
 
         morning.get("max_wind", ""),                        # wind_speed_am
         afternoon.get("max_wind", ""),                      # wind_speed_pm
         all_day.get("max_wind", ""),                        # wind_speed_max
-        "",                                                 # wind_direction_am（未取得）
+        morning.get("wind_direction", ""),                  # wind_direction_am（analyze_periodで取得済み）
 
-        "",                                                 # precip_am（未取得）
-        "",                                                 # precip_total（未取得）
+        morning.get("max_precip", ""),                      # precip_am（analyze_periodで取得済み）
+        all_day.get("max_precip", ""),                      # precip_total（analyze_periodで取得済み）
 
         jma_wave_today,                                     # jma_wave_today
         jma_wave_tomorrow,                                  # jma_wave_tomorrow
