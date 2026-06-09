@@ -141,46 +141,62 @@ DISCLAIMER_EN = "*AI-based estimate. Check official Zamami Village website for c
 # 1. %変換
 # ============================================================
 
-def score_to_pct_highspeed(score):
+def wave_to_pct_highspeed(wave):
     """
-    高速船欠航可能性%に変換。
+    高速船欠航可能性% = 波高(m)の直接ロジスティック関数。
 
-    2026-06: 過去165日（2024-12〜2026-06）の実績データでロジスティック回帰により
-    再キャリブレーション。旧値(inflection=0.42, steepness=14)は中域で一貫して
-    過小評価（予測20-29%→実欠航率50%、予測60-69%→実100%）だった。
-    最適化値 inflection=0.352, steepness=28.18 を採用（対数尤度 +9.1 改善）。
+    2026-06: 特徴量選択分析（過去165日）の結論に基づき「波高単独モデル」へ移行。
+    うねり・風速は波高と強く相関（風速 r=+0.84）し、多変量回帰で有意でなく
+    （波高を制御するとp>0.1）、ネスト比較でも追加価値なし（CV-AUC 波のみ0.938 ≒
+    現行3変数0.949）。さらにEPV不足のため変数を絞る方が頑健。
+    → 波高のみで欠航%を直接ロジスティック回帰でフィット。
+       変曲点(50%)=2.01m, 急峻さ=4.92（n=155 / 欠航34日, dock/equip除外）。
 
-    新パラメータでのスコア→欠航率（実績と整合）:
-      score 0.25 → 13%   （実欠航率 ≈ 9%）
-      score 0.30 → 19%   （実 32%）
-      score 0.35 → 51%   （境界）
-      score 0.40 → 79%   （実 95%）
-      score 0.45 → 94%   （実 100%）
+    波高 → 欠航%（実測と整合）:
+      1.5m →  8%   （実 30%）
+      2.0m → 49%   （実 38%）
+      2.5m → 92%   （実 100%）
+      3.0m → 99%   （実 100%）
+    ※ うねり/風速/風向/突風は将来の増分検証用にログ収集は継続（6/9以降）。
+    ※ 台風急接近など波高が実態に追いつかない局面は typhoon_floor / JMA で別途補完。
     """
-    inflection = 0.352
-    steepness  = 28.18
-    pct = 100 / (1 + math.exp(-steepness * (score - inflection)))
+    if wave is None:
+        return 1
+    inflection = 2.01   # m（50%到達波高）
+    steepness  = 4.92
+    pct = 100 / (1 + math.exp(-steepness * (wave - inflection)))
     return round(min(max(pct, 1), 99))
 
 
-def score_to_pct_ferry(score):
+def wave_to_pct_ferry(wave):
     """
-    フェリー欠航可能性%に変換。
+    フェリー欠航可能性% = 波高(m)の直接ロジスティック関数。
 
-    2026-06: 実績データで再キャリブレーション。旧値(0.52, 12)は大幅に過小評価
-    （予測30-39%→実欠航率91%）。実績は score≈0.40 を境にほぼ0%↔ほぼ100%の
-    急峻な階段状（score0.3バケット欠航率0% / score0.4バケット78% / 0.5バケット100%）。
-    最適化では inflection=0.431, steepness=72 となったが、欠航サンプル16日に対し
-    steepness=72 は過適合（波高±0.01で予測が反転）。inflection は最適値を採用しつつ
-    steepness は 30 に抑えて入力ノイズへの頑健性を確保する。
-      score 0.35 → 11%
-      score 0.43 → 50%（境界）
-      score 0.50 → 89%
+    2026-06: 高速船と同じく波高単独モデルへ移行。
+    波高のみでフィット: 変曲点(50%)=2.68m, 急峻さ=7.34（n=139 / 欠航16日）。
+    フェリーは高速船より耐波性が高く、変曲点が約0.7m高い（2.01m→2.68m）。
+
+    波高 → 欠航%（実測と整合）:
+      2.0m →  1%   （実 0%）
+      2.5m → 21%   （実 78%, n=9）
+      3.0m → 91%   （実 88%）
+      3.5m → 100%  （実 100%）
     """
-    inflection = 0.43
-    steepness  = 30.0
-    pct = 100 / (1 + math.exp(-steepness * (score - inflection)))
+    if wave is None:
+        return 1
+    inflection = 2.68   # m
+    steepness  = 7.34
+    pct = 100 / (1 + math.exp(-steepness * (wave - inflection)))
     return round(min(max(pct, 1), 99))
+
+
+# 後方互換エイリアス（旧名で呼ぶ箇所が将来現れた場合に備える）。
+# 引数は「波高(m)」を渡すこと。スコアではない点に注意。
+def score_to_pct_highspeed(wave):
+    return wave_to_pct_highspeed(wave)
+
+def score_to_pct_ferry(wave):
+    return wave_to_pct_ferry(wave)
 
 
 # ============================================================
@@ -252,10 +268,11 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         afternoon = analysis.get(date, {}).get("afternoon")
 
         if all_day:
-            hs_pct = score_to_pct_highspeed(all_day["cancellation_score"])
-            fe_pct = score_to_pct_ferry(all_day["cancellation_score"])
-            hs_am_pct = score_to_pct_highspeed(morning["cancellation_score"]) if morning else hs_pct
-            hs_pm_pct = score_to_pct_highspeed(afternoon["cancellation_score"]) if afternoon else hs_pct
+            # 波高単独モデル（2026-06〜）：欠航%は波高(max_wave)の直接関数。
+            hs_pct = wave_to_pct_highspeed(all_day.get("max_wave"))
+            fe_pct = wave_to_pct_ferry(all_day.get("max_wave"))
+            hs_am_pct = wave_to_pct_highspeed(morning.get("max_wave")) if morning else hs_pct
+            hs_pm_pct = wave_to_pct_highspeed(afternoon.get("max_wave")) if afternoon else hs_pct
         else:
             hs_pct = fe_pct = hs_am_pct = hs_pm_pct = 0
 
@@ -316,8 +333,8 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         dt = now + timedelta(days=delta)
         all_day = analysis.get(date, {}).get("all_day")
         if all_day:
-            hs_pct = score_to_pct_highspeed(all_day["cancellation_score"])
-            fe_pct = score_to_pct_ferry(all_day["cancellation_score"])
+            hs_pct = wave_to_pct_highspeed(all_day.get("max_wave"))
+            fe_pct = wave_to_pct_ferry(all_day.get("max_wave"))
             # 台風フロア適用
             tphn = typhoon_by_date.get(date)
             if tphn:

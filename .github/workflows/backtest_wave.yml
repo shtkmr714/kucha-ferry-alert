@@ -1,8 +1,8 @@
-name: Fit Wave Only (one-time)
+﻿name: Backtest Wave (one-time)
 on:
   workflow_dispatch:
 jobs:
-  fit:
+  bt:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -13,5 +13,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install gspread google-auth numpy scipy
-      - run: python fit_wave_only.py
+      - run: pip install gspread google-auth
+      - run: python backtest_wave.py
