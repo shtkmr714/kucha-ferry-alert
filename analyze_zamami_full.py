@@ -376,6 +376,43 @@ def logistic_regression_analysis(recs):
         print(f"    score{b:.1f}: n={v['n']:2d} 実欠航率={rate:.0%}  "
               f"現モデル={pct_current:.0f}%  最適={pct_new:.0f}%  {bar}")
 
+    # ===== フェリーの sigmoid 最適化 =====
+    valid_fe = [r for r in recs
+                if r["wave_max"] is not None and r["wind_max"] is not None
+                and r["fe_op"] is not None
+                and r["fe_reason"] not in ("dock", "equipment")]
+    scores_fe = np.array([calc_score(r["wave_max"], r["swell"] or 0, r["wind_max"] or 0)
+                          for r in valid_fe])
+    y_fe = np.array([r["fe_wx"] for r in valid_fe])
+
+    res_fe = minimize(neg_log_likelihood, [0.52, 12.0], args=(scores_fe, y_fe),
+                      method="Nelder-Mead", options={"xatol":0.001,"fatol":0.001})
+    ll_fe_current = neg_log_likelihood([0.52, 12.0], scores_fe, y_fe)
+
+    print(f"\n  【フェリー sigmoid 最適化】 n={len(valid_fe)} 欠航={int(y_fe.sum())}日")
+    print(f"    現行: inflection=0.52, steepness=12.0  対数尤度={-ll_fe_current:.1f}")
+    print(f"    最適: inflection={res_fe.x[0]:.3f}, steepness={res_fe.x[1]:.2f}  "
+          f"対数尤度={-res_fe.fun:.1f} (改善:{ll_fe_current-res_fe.fun:.1f})")
+
+    print(f"\n  【フェリー スコア区間別 欠航率】")
+    fe_buckets = {}
+    for s, label in zip(scores_fe, y_fe):
+        b = int(s * 10) / 10
+        fe_buckets.setdefault(b, {"n":0,"cancel":0})
+        fe_buckets[b]["n"] += 1
+        fe_buckets[b]["cancel"] += int(label)
+    for b in sorted(fe_buckets):
+        v = fe_buckets[b]
+        rate = v["cancel"] / v["n"]
+        pct_cur = 100 / (1 + math.exp(-12.0 * (b + 0.05 - 0.52)))
+        pct_new = 100 / (1 + math.exp(-res_fe.x[1] * (b + 0.05 - res_fe.x[0])))
+        print(f"    score{b:.1f}: n={v['n']:2d} 実欠航率={rate:.0%}  "
+              f"現モデル={pct_cur:.0f}%  最適={pct_new:.0f}%")
+
+    print(f"\n  ★適用推奨値:")
+    print(f"    高速船: inflection={res_max.x[0]:.3f}, steepness={res_max.x[1]:.2f}")
+    print(f"    フェリー: inflection={res_fe.x[0]:.3f}, steepness={res_fe.x[1]:.2f}")
+
     return res_max.x, res_am.x
 
 
