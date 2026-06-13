@@ -397,13 +397,14 @@ Best production method:
 
 | 役割 | ファイル |
 |---|---|
-| 設計仕様（本書） | `assets/format/ferry_forecast_design_spec_for_claude.md` |
-| 短期テンプレ | `assets/format/Format_Zamami.png`（座間味・1254²） |
-| 短期テンプレ・運休例 | `assets/format/Format_Zamami_Suspended.png` |
-| 長期テンプレ | `assets/format/Format_zamami_longterm.png` |
-| JSONサンプル | `assets/format/short_term_forecast_sample.json` / `long_term_forecast_sample.json` |
-| 短期レンダラ | `forecast_publisher.py` → `make_image_short()` ✅本書準拠で実装済 |
-| 長期レンダラ | `forecast_publisher.py` → `make_image_longterm()` ⚠旧デザイン（新テンプレ未反映） |
+| 設計仕様（本書） | `docs/image_design_spec.md` |
+| 短期テンプレ | `assets/templates/Format_Zamami.png`（座間味・1254²） |
+| 短期テンプレ・運休例 | `assets/templates/Format_Zamami_Suspended.png` |
+| 長期 参考デザイン（縦長） | `assets/templates/Format_zamami_longterm.png` |
+| フォント | `assets/fonts/`（Manrope, Inter + OFLライセンス） |
+| JSONサンプル | `docs/samples/short_term_forecast_sample.json` / `long_term_forecast_sample.json` |
+| 短期レンダラ | `forecast_publisher.py` → `make_image_short()` ✅テンプレ合成で実装済 |
+| 長期レンダラ | `forecast_publisher.py` → `make_image_longterm()` ✅新デザインをPILで正方形1254²再構築（参考テンプレは縦長のため流用せず同デザインを実装） |
 | リスク5段階・色 | `forecast_publisher.py` → `_risk_band()` ✅本書の色スケールと一致 |
 | 運休枠（点線＋公式発表） | `forecast_publisher.py` → `_draw_suspended_box()` ✅本書準拠 |
 | display_risk 計算 | `forecast_publisher.py` → `effective_max_pct()` ✅本書「運航中船種の最大」と一致 |
@@ -424,16 +425,16 @@ Best production method:
 | `ferry.risk` | `['ferry_pct']` | |
 | `ferry.suspended` | `['suspended_ferry']` | |
 
-## 7-4. 運用上の決定事項・未解決（要判断）
+## 7-4. 運用上の決定事項
 
-1. **キャンバスサイズ**：本書は 1080²、テンプレ実体は短期=1254²。現状コードは1254²で出力。
-   → カルーセル内で**画像①②③のアスペクト比を必ず統一**すること（Instagramは先頭比率で他をトリミング）。
-2. **長期テンプレが縦長（1122×1402＝4:5）**。短期は正方形。**このままでは比率不一致**。
-   → 全画像を「正方形 1080²」or「縦 4:5」のどちらかに統一する必要あり（要決定）。
-3. **長期レンダラ**（`make_image_longterm`）は旧デザインのまま。新テンプレ `Format_zamami_longterm.png` への
-   移行は短期と同方式（テンプレ合成）で別途実施する。
-4. **渡嘉敷・八重山**は同じテンプレ構造を流用（route_label / route_line / 島マップのみ差替）。
-   八重山は航路別の行構成に拡張（本書 §4 参照）。
+1. **キャンバス＝正方形 1254²で統一（確定）**。カルーセル3枚（①短期/②長期/③気象データ）すべて1254²。
+   - 短期＝テンプレ native 1254²。長期＝PILで1254²直接描画。気象データ＝1080描画→保存時に1254²へ拡大。
+2. **長期は正方形にPIL再構築済み**（参考テンプレ `Format_zamami_longterm.png` は縦長4:5のため画像合成には使わず、同じデザイン言語を1254²で実装）。
+3. **フォント（確定）**：数字%=Manrope Bold / 英語=Inter Medium / 日本語=Noto Sans JP（CJK）Medium。§1 Fonts 参照。
+4. **長期の島マップは未実装**（縦長テンプレの写真マップが正方形に流用できないため、海グラデ背景に集約）。
+   正方形用の島マップ素材（透過PNG等）が用意できれば追加可能。
+5. **渡嘉敷・八重山**は同じテンプレ構造を流用予定（route_label / route_line / 島マップのみ差替）。
+   八重山は航路別の行構成に拡張（本書 §4 参照）。※現状は座間味のみ新デザイン適用。
 
 ## 7-5. 検証（軽量バリデーション）
 レンダリング前に最低限：

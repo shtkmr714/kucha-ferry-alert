@@ -539,9 +539,9 @@ def make_image_header(forecast, output_path):
 
 
 # ── 画像①テンプレート（ユーザー作成デザイン）合成設定 ──
-# テンプレート/設計仕様は assets/format/ に集約（ferry_forecast_design_spec_for_claude.md 準拠）
+# テンプレ画像=assets/templates/、設計仕様=docs/image_design_spec.md
 SHORT_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "assets", "format", "Format_Zamami.png")
+                              "assets", "templates", "Format_Zamami.png")
 # テンプレート上の2カード座標（1254×1254基準・実測値）
 _CARD1 = (434, 58, 810, 990)
 _CARD2 = (818, 58, 1207, 990)
@@ -744,106 +744,168 @@ def make_image_short(forecast, output_path):
     print(f"  画像①保存: {output_path}")
 
 
-def make_image_longterm(forecast, output_path):
-    """画像③: 長期予報（日英併記・左右2列棒グラフ・確定版）"""
-    lt = forecast["long_term"]
-    max_pct = lt["max_pct"]
-    img = Image.new("RGB", IMG_SIZE, color=hex_to_rgb(get_bg_color(max_pct)))
-    draw = ImageDraw.Draw(img)
-    f = {
-        "title_ja": _load_font(FONT_BOLD,    44),
-        "title_en": _load_font(FONT_MEDIUM,  26),
-        "island":   _load_font(FONT_REGULAR, 22),
-        "head":     _load_font(FONT_MEDIUM,  32),
-        "head_en":  _load_font(FONT_REGULAR, 24),
-        "period":   _load_font(FONT_BOLD,    64),
-        "pct":      _load_font(FONT_BOLD,    76),
-        "label":    _load_font(FONT_MEDIUM,  28),
-        "label_en": _load_font(FONT_REGULAR, 22),
-        "col_hd":   _load_font(FONT_MEDIUM,  22),
-        "bar":      _load_font(FONT_REGULAR, 21),
-        "badge":    _load_font(FONT_BOLD,    18),
-        "xs":       _load_font(FONT_REGULAR, 17),
-    }
+def _ocean_bg(size):
+    """海のグラデーション背景（上=明るい青 / 下=濃い青）。"""
+    w, h = size
+    img = Image.new("RGB", size)
+    d = ImageDraw.Draw(img)
+    top, bot = (6, 124, 190), (1, 58, 116)
+    for yy in range(h):
+        t = yy / h
+        d.line([(0, yy), (w, yy)],
+               fill=tuple(int(top[i]*(1-t) + bot[i]*t) for i in range(3)))
+    return img
 
-    # タイトル
-    draw.text((540, 46), "フェリー欠航可能性 長期予報（3〜7日先）", font=f["title_ja"], fill="white", anchor="mm")
-    draw.text((540, 86), "Ferry Cancellation Risk  /  Long-term Forecast (3-7 days ahead)", font=f["title_en"], fill="rgba(255,255,255,200)", anchor="mm")
-    draw.text((540, 112), "座間味島・阿嘉島・慶留間島  Zamami / Aka / Geruma", font=f["island"], fill="rgba(255,255,255,160)", anchor="mm")
-    draw.line([(80,128),(1000,128)], fill="rgba(255,255,255,100)", width=1)
 
-    if lt["has_risk"]:
-        # リスク期間・最大%
-        draw.text((540, 183), "欠航リスク期間  /  Risk Period", font=f["head"], fill="rgba(255,255,255,200)", anchor="mm")
-        draw.text((540, 255), lt["risk_period"], font=f["period"], fill="white", anchor="mm")
-        draw.text((540, 308), lt["risk_period_en"], font=f["head_en"], fill="rgba(255,255,255,180)", anchor="mm")
-        draw.line([(80,328),(1000,328)], fill="rgba(255,255,255,70)", width=1)
-
-        # 高速船・フェリー最大% — 運休中の船種は除外する（運休日の天候%は誤解を招くため）
-        hs_running = [d["highspeed_pct"] for d in lt["days"] if not d.get("suspended_highspeed")]
-        fe_running = [d["ferry_pct"]     for d in lt["days"] if not d.get("suspended_ferry")]
-        hs_max = max(hs_running) if hs_running else None
-        fe_max = max(fe_running) if fe_running else None
-        for x, pct, lja, len_ in [
-            (270, hs_max, "高速船", "High Speed Boat"),
-            (810, fe_max, "フェリー", "Ferry"),
-        ]:
-            draw.text((x, 362), lja, font=f["label"], fill="rgba(255,255,255,200)", anchor="mm")
-            draw.text((x, 388), len_, font=f["label_en"], fill="rgba(255,255,255,170)", anchor="mm")
-            if pct is None:
-                # 期間中ずっと運休の船種は%ではなく「全日運休」を表示
-                draw.text((x, 453), "全日運休", font=f["label"], fill="white", anchor="mm")
-                draw.text((x, 500), "Suspended (period)", font=f["label_en"], fill="rgba(255,255,255,160)", anchor="mm")
-            else:
-                draw.text((x, 453), f"{pct}%", font=f["pct"], fill="white", anchor="mm")
-                draw.text((x, 500), "最大欠航可能性 / Max Risk", font=f["label_en"], fill="rgba(255,255,255,160)", anchor="mm")
-        draw.line([(540,333),(540,520)], fill="rgba(255,255,255,60)", width=1)
-    else:
-        draw.text((540, 300), "懸念なし  /  No Significant Risk", font=f["period"], fill="white", anchor="mm")
-
-    # 左右2列の横棒グラフ
-    draw.line([(80,530),(1000,530)], fill="rgba(255,255,255,70)", width=1)
-    draw.text((290, 552), "高速船  High Speed Boat", font=f["col_hd"], fill="white", anchor="mm")
-    draw.text((790, 552), "フェリー  Ferry", font=f["col_hd"], fill="white", anchor="mm")
-
-    FOOTER_LINE_Y = 960  # フッター区切り線Y座標（縦線はここで止める）
-    bar_top, bar_h, row_sp = 580, 28, 72
-    cols = [
-        {"date_x": 155, "bar_x": 175, "bar_max": 270, "pct_x": 455, "key": "highspeed_pct", "suspended_key": "suspended_highspeed"},
-        {"date_x": 595, "bar_x": 615, "bar_max": 270, "pct_x": 895, "key": "ferry_pct",     "suspended_key": "suspended_ferry"},
+def _draw_risk_guide(draw, cx, y, fonts):
+    """画面下部のリスク5段階ガイド（白カード内・5色ドット）。"""
+    items = [
+        ("0-10%",   "低い",       "LOW",       (46, 125, 50)),
+        ("10-30%",  "やや低い",   "LOW-MID",   (104, 159, 56)),
+        ("30-50%",  "やや高い",   "MID",       (240, 160, 0)),
+        ("50-80%",  "高い",       "HIGH",      (230, 81, 0)),
+        ("80-100%", "非常に高い", "VERY HIGH", (178, 28, 28)),
     ]
-    for i, d in enumerate(lt["days"][:5]):
-        y = bar_top + i * row_sp
+    n = len(items)
+    span = 1090
+    x0 = cx - span // 2
+    step = span // n
+    for i, (rng, ja, en, col) in enumerate(items):
+        ix = x0 + i * step + 14
+        draw.ellipse([ix, y - 12, ix + 24, y + 12], fill=col)
+        tx = ix + 36
+        draw.text((tx, y - 18), rng, font=fonts["g_pct"], fill=(40, 50, 70), anchor="lm")
+        draw.text((tx, y + 2),  ja,  font=fonts["g_ja"],  fill=(40, 50, 70), anchor="lm")
+        draw.text((tx, y + 20), en,  font=fonts["g_en"],  fill=(120, 130, 150), anchor="lm")
+
+
+def make_image_longterm(forecast, output_path):
+    """画像③: 長期予報（3〜7日先）。新テンプレ準拠・正方形1254²。
+    海グラデ背景＋リスク期間カード＋高速船/フェリー2列の日別バー（5段階バンド色）。"""
+    lt = forecast["long_term"]
+    W = OUTPUT_SIZE[0]
+    img = _ocean_bg(OUTPUT_SIZE)
+    draw = ImageDraw.Draw(img)
+    cx = W // 2
+
+    f = {
+        "title":  _load_font(FONT_BOLD,   40),                       # 日本語タイトル
+        "title_en": _load_var_font(FONT_INTER, 21, "Medium"),
+        "route":  _load_font(FONT_MEDIUM, 20),
+        "head":   _load_font(FONT_MEDIUM, 26),                       # 欠航リスク期間
+        "period": _load_font(FONT_BOLD,   54),                       # 6/7〜6/13（〜含むのでNoto）
+        "period_en": _load_var_font(FONT_INTER, 22, "Medium"),
+        "vlabel": _load_font(FONT_MEDIUM, 23),                       # 高速船 High-speed boat
+        "vmax":   _load_var_font(FONT_MANROPE, 58, "Bold"),          # 70%
+        "maxlbl": _load_var_font(FONT_INTER, 16, "Medium"),
+        "colhd":  _load_font(FONT_MEDIUM, 24),
+        "date":   _load_font(FONT_MEDIUM, 20),                       # 6/7(土)
+        "barpct": _load_var_font(FONT_MANROPE, 24, "Bold"),
+        "susp":   _load_font(FONT_MEDIUM, 19),
+        "g_pct":  _load_var_font(FONT_INTER, 15, "SemiBold"),
+        "g_ja":   _load_font(FONT_MEDIUM, 15),
+        "g_en":   _load_var_font(FONT_INTER, 12, "Medium"),
+        "xs":     _load_font(FONT_REGULAR, 17),
+        "xs_en":  _load_var_font(FONT_INTER, 15, "Medium"),
+    }
+    DAY_JA = ["月", "火", "水", "木", "金", "土", "日"]
+
+    # ── ヘッダー（ネイビー帯）──
+    draw.rectangle([(0, 0), (W, 150)], fill=(13, 47, 92))
+    draw.text((cx, 50), "フェリー欠航可能性 長期予報（3〜7日先）",
+              font=f["title"], fill="white", anchor="mm")
+    draw.text((cx, 92), "Ferry Cancellation Risk  /  Long-term Forecast (3-7 days ahead)",
+              font=f["title_en"], fill=(200, 220, 245), anchor="mm")
+    draw.text((cx, 122), "座間味・阿嘉 ⇔ 那覇   Zamami / Aka ⇔ Naha",
+              font=f["route"], fill=(170, 200, 235), anchor="mm")
+
+    # ── リスク期間サマリーカード ──
+    cardW = W - 100
+    card = (50, 175, 50 + cardW, 470)
+    draw.rounded_rectangle(card, radius=22, fill=(248, 250, 252))
+    max_band = _risk_band(lt["max_pct"])
+
+    draw.text((cx, 212), "欠航リスク期間  Risk Period",
+              font=f["head"], fill=(90, 100, 120), anchor="mm")
+    if lt["has_risk"]:
+        draw.text((cx, 268), lt["risk_period"].replace("頃", ""),
+                  font=f["period"], fill=max_band[2], anchor="mm")
+        draw.text((cx, 312), lt["risk_period_en"],
+                  font=f["period_en"], fill=(110, 120, 140), anchor="mm")
+    else:
+        draw.text((cx, 285), "懸念なし  No Significant Risk",
+                  font=f["period"], fill=(46, 125, 50), anchor="mm")
+    draw.line([(90, 345), (W - 90, 345)], fill=(225, 228, 234), width=2)
+
+    # 船種別 最大%（運休除外）
+    hs_running = [d["highspeed_pct"] for d in lt["days"] if not d.get("suspended_highspeed")]
+    fe_running = [d["ferry_pct"]     for d in lt["days"] if not d.get("suspended_ferry")]
+    hs_max = max(hs_running) if hs_running else None
+    fe_max = max(fe_running) if fe_running else None
+    draw.line([(cx, 360), (cx, 452)], fill=(225, 228, 234), width=2)
+    for vx, pct, lja, len_ in [(cx//2 + 30, hs_max, "高速船", "High-speed boat"),
+                               (cx + cx//2 - 30, fe_max, "フェリー", "Ferry")]:
+        draw.text((vx, 380), f"{lja}  {len_}", font=f["vlabel"], fill=(70, 80, 100), anchor="mm")
+        if pct is None:
+            draw.text((vx, 425), "全日運休", font=f["vlabel"], fill=(120, 124, 130), anchor="mm")
+        else:
+            b = _risk_band(pct)
+            draw.text((vx, 425), f"{pct}%", font=f["vmax"], fill=b[2], anchor="mm")
+            draw.text((vx, 458), "最大欠航可能性 / Max Risk", font=f["maxlbl"], fill=(140, 150, 165), anchor="mm")
+
+    # ── 2列バーチャート（白カード）──
+    bars_card = (50, 495, 50 + cardW, 1055)
+    draw.rounded_rectangle(bars_card, radius=22, fill=(248, 250, 252))
+    col_cx = [cx // 2 + 30, cx + cx // 2 - 30]
+    draw.text((col_cx[0], 530), "高速船  High-speed boat", font=f["colhd"], fill=(40, 50, 70), anchor="mm")
+    draw.text((col_cx[1], 530), "フェリー  Ferry",          font=f["colhd"], fill=(40, 50, 70), anchor="mm")
+    draw.line([(cx, 515), (cx, 1035)], fill=(228, 231, 236), width=1)
+
+    days = lt["days"][:7]
+    n = max(len(days), 1)
+    area_top, area_bot = 565, 1035
+    row_h = (area_bot - area_top) // n
+    # 列ごとの座標: date(右寄せ) | bar track | pct
+    cols = [
+        {"date_r": 130,  "bx0": 145,  "bx1": 470,  "px": 485,  "key": "highspeed_pct", "sus": "suspended_highspeed"},
+        {"date_r": 130+cx, "bx0": 145+cx, "bx1": 470+cx, "px": 485+cx, "key": "ferry_pct", "sus": "suspended_ferry"},
+    ]
+    bar_h = min(30, row_h - 22)
+    for i, d in enumerate(days):
+        ry = area_top + i * row_h
+        cyr = ry + row_h // 2
         dt = datetime.strptime(d["date"], "%Y-%m-%d")
-        label = dt.strftime("%-m/%-d")  # 棒グラフは5/11形式
+        label = f"{dt.month}/{dt.day}({DAY_JA[dt.weekday()]})"
         for col in cols:
             pct = d[col["key"]]
-            bar_w = int(col["bar_max"] * pct / 100)
-            is_sus = col["suspended_key"] and d.get(col["suspended_key"], False)
-            draw.text((col["date_x"], y + bar_h//2), label, font=f["bar"], fill="white", anchor="rm")
-            draw.rectangle([(col["bar_x"], y),(col["bar_x"]+col["bar_max"], y+bar_h)], fill=(0,0,0,50))
+            is_sus = d.get(col["sus"], False)
+            draw.text((col["date_r"], cyr), label, font=f["date"], fill=(60, 70, 90), anchor="rm")
+            track = [col["bx0"], cyr - bar_h//2, col["bx1"], cyr + bar_h//2]
+            draw.rounded_rectangle(track, radius=bar_h//2, fill=(228, 231, 236))
             if is_sus:
-                # 運休: ハッチング風（斜線）
-                for sx in range(col["bar_x"], col["bar_x"]+col["bar_max"], 8):
-                    draw.line([(sx, y),(sx+bar_h, y+bar_h)], fill=(150,180,200,180), width=2)
-                draw.rectangle([(col["bar_x"], y),(col["bar_x"]+col["bar_max"], y+bar_h)],
-                               outline=(180,210,230,200), width=1)
-                # 「運休 / Suspended」日英2行
-                f_sus_en = _load_font(FONT_REGULAR, 13)
-                draw.text((col["pct_x"], y + 6),  "運休",      font=f["badge"], fill=(180,220,255),     anchor="lm")
-                draw.text((col["pct_x"], y + 20), "Suspended", font=f_sus_en,   fill=(180,220,255,180), anchor="lm")
+                for sx in range(col["bx0"], col["bx1"], 11):
+                    draw.line([(sx, cyr - bar_h//2), (sx + bar_h, cyr + bar_h//2)],
+                              fill=(176, 184, 196), width=2)
+                mid = (col["bx0"] + col["bx1"]) // 2
+                draw.text((mid, cyr), "運休 Suspended", font=f["susp"], fill=(90, 96, 106), anchor="mm")
             else:
-                if bar_w > 0:
-                    draw.rectangle([(col["bar_x"], y),(col["bar_x"]+bar_w, y+bar_h)], fill=(255,255,255,210))
-                draw.text((col["pct_x"], y + bar_h//2), f"{pct}%", font=f["bar"], fill="white", anchor="lm")
+                b = _risk_band(pct)
+                bw = int((col["bx1"] - col["bx0"]) * max(pct, 1) / 100)
+                if bw > bar_h:
+                    draw.rounded_rectangle([col["bx0"], cyr - bar_h//2, col["bx0"]+bw, cyr + bar_h//2],
+                                           radius=bar_h//2, fill=b[2])
+                draw.text((col["px"], cyr), f"{pct}%", font=f["barpct"], fill=b[2], anchor="lm")
 
-    # 縦区切り線：フッター区切り線で止める
-    draw.line([(540, 535),(540, FOOTER_LINE_Y)], fill="rgba(255,255,255,50)", width=1)
-    draw.line([(80, FOOTER_LINE_Y),(1000, FOOTER_LINE_Y)], fill="rgba(255,255,255,40)", width=1)
-    draw.text((540, 985), "※AI予測・参考値。公式情報は座間味村HPをご確認ください。", font=f["xs"], fill="rgba(255,255,255,140)", anchor="mm")
-    draw.text((540, 1006), "*AI-based estimate. Check official Zamami Village website.", font=f["xs"], fill="rgba(255,255,255,120)", anchor="mm")
+    # ── リスクガイド（白カード上に描画して可読性確保）──
+    draw.rounded_rectangle([(50, 1072), (50 + cardW, 1150)], radius=18, fill=(248, 250, 252))
+    _draw_risk_guide(draw, cx, 1111, f)
 
-    img = img.resize(OUTPUT_SIZE, Image.LANCZOS)   # カルーセル統一: 1254²
+    # ── 免責 ──
+    draw.text((cx, 1180), "※AI予測・参考値。公式情報は各航路の運航会社HPをご確認ください。",
+              font=f["xs"], fill=(225, 235, 248), anchor="mm")
+    draw.text((cx, 1206), "*AI-based estimate. Check official website for the latest information.",
+              font=f["xs_en"], fill=(190, 210, 235), anchor="mm")
+
     img.save(output_path)
     print(f"  画像③保存: {output_path}")
 
