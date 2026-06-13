@@ -1,0 +1,35 @@
+# === 秘密情報（絶対にコミットしない） ===
+# Google Sheets サービスアカウント鍵
+ferry-forecast-*.json
+*-service-account*.json
+*serviceaccount*.json
+# 各種トークン
+*Token*.txt
+*token*.txt
+secrets_*.txt
+.env
+.env.*
+
+# === ローカル生成物・キャッシュ ===
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# === テスト・モック出力（投稿用画像ではない） ===
+test_output/
+_card_fonts.py
+_font_compare*.py
+_sample_short.py
+test_bg_sample.py
+test_images.py
+test_new_layout_mockup.py
+test_suspension_mockup.py
+
+# === Claude Code ローカル設定 ===
+.claude/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# 注意: assets/（fonts・templates）は本番実行に必要なためコミット対象。除外しないこと。
