@@ -84,6 +84,16 @@ def get_zamami_operation_status():
             else:
                 return "weather"
 
+        def _sentence_for(text, names):
+            """本文を文単位に分割し、指定船名を含む文だけを返す。
+            船種ごとに理由判定を分離し、他船の『ドック』等が混入するのを防ぐ
+            （例: クイーン=ドック運休／フェリー=海上時化欠航 が同一本文に併記される日）。
+            見つからなければ空文字（_cancel_reason は weather にフォールバック）。"""
+            for p in re.split(r"[・。\n]", text or ""):
+                if any(nm in p for nm in names):
+                    return p
+            return ""
+
         # ============================================================
         # 船ごとの運航判定（CSSクラス構造を直接使用）
         #
@@ -105,7 +115,8 @@ def get_zamami_operation_status():
             if "フェリーざまみ" in vessel_name:
                 if is_suspended:
                     result["ferry_operated"] = 0
-                    result["ferry_cancel_reason"] = _cancel_reason(head_text)
+                    result["ferry_cancel_reason"] = _cancel_reason(
+                        _sentence_for(head_text, ["フェリーざまみ"]))
                 else:
                     result["ferry_operated"] = 1
                     result["ferry_cancel_reason"] = "none"
@@ -118,7 +129,8 @@ def get_zamami_operation_status():
                     result["hs_bin1_operated"] = 0
                     result["hs_bin2_operated"] = 0
                     result["hs_bin3_operated"] = 0
-                    result["hs_cancel_reason"] = _cancel_reason(head_text)
+                    result["hs_cancel_reason"] = _cancel_reason(
+                        _sentence_for(head_text, ["クイーンざまみ", "クィーンざまみ"]))
                 else:
                     # 運航している便 = bl_routeSchedule_row が存在する便
                     active_bins = set()
