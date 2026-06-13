@@ -1,0 +1,44 @@
+{
+  "template": "long_term",
+  "route_id": "zamami_aka",
+  "route_label_ja": "座間味・阿嘉",
+  "route_label_en": "ZAMAMI / AKA",
+  "route_line_ja": "座間味・阿嘉 ⇔ 那覇",
+  "route_line_en": "Zamami / Aka ⇔ Naha",
+  "risk_period": {
+    "start": "2026-06-07",
+    "end": "2026-06-13",
+    "label_ja": "6/7 〜 6/13",
+    "label_en": "Jun 7 – Jun 13"
+  },
+  "summary": {
+    "high_speed_boat": {
+      "max_risk": 70,
+      "all_suspended": false
+    },
+    "ferry": {
+      "max_risk": 45,
+      "all_suspended": false
+    }
+  },
+  "daily": {
+    "high_speed_boat": [
+      { "date": "2026-06-07", "label": "6/7(土)", "weekday_en": "Sat", "risk": 70, "suspended": false },
+      { "date": "2026-06-08", "label": "6/8(日)", "weekday_en": "Sun", "risk": 35, "suspended": false },
+      { "date": "2026-06-09", "label": "6/9(月)", "weekday_en": "Mon", "risk": 20, "suspended": false },
+      { "date": "2026-06-10", "label": "6/10(火)", "weekday_en": "Tue", "risk": null, "suspended": true },
+      { "date": "2026-06-11", "label": "6/11(水)", "weekday_en": "Wed", "risk": 15, "suspended": false },
+      { "date": "2026-06-12", "label": "6/12(木)", "weekday_en": "Thu", "risk": 5, "suspended": false },
+      { "date": "2026-06-13", "label": "6/13(金)", "weekday_en": "Fri", "risk": 5, "suspended": false }
+    ],
+    "ferry": [
+      { "date": "2026-06-07", "label": "6/7(土)", "weekday_en": "Sat", "risk": 45, "suspended": false },
+      { "date": "2026-06-08", "label": "6/8(日)", "weekday_en": "Sun", "risk": 25, "suspended": false },
+      { "date": "2026-06-09", "label": "6/9(月)", "weekday_en": "Mon", "risk": 20, "suspended": false },
+      { "date": "2026-06-10", "label": "6/10(火)", "weekday_en": "Tue", "risk": null, "suspended": true },
+      { "date": "2026-06-11", "label": "6/11(水)", "weekday_en": "Wed", "risk": 10, "suspended": false },
+      { "date": "2026-06-12", "label": "6/12(木)", "weekday_en": "Thu", "risk": 5, "suspended": false },
+      { "date": "2026-06-13", "label": "6/13(金)", "weekday_en": "Fri", "risk": 5, "suspended": false }
+    ]
+  }
+}
