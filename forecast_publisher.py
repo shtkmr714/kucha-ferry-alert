@@ -797,7 +797,7 @@ def make_image_longterm(forecast, output_path):
         "period_en": _load_var_font(FONT_INTER, 22, "Medium"),
         "vlabel": _load_font(FONT_MEDIUM, 23),                       # 高速船 High-speed boat
         "vmax":   _load_var_font(FONT_MANROPE, 58, "Bold"),          # 70%
-        "maxlbl": _load_var_font(FONT_INTER, 16, "Medium"),
+        "maxlbl": _load_font(FONT_MEDIUM, 16),   # 「最大欠航可能性 / Max Risk」(日英混在→Noto)
         "colhd":  _load_font(FONT_MEDIUM, 24),
         "date":   _load_font(FONT_MEDIUM, 20),                       # 6/7(土)
         "barpct": _load_var_font(FONT_MANROPE, 24, "Bold"),
