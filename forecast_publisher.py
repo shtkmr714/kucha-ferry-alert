@@ -296,10 +296,18 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
 
         if all_day:
             # 波高単独モデル（2026-06〜）：欠航%は波高(max_wave)の直接関数。
-            hs_pct = wave_to_pct_highspeed(all_day.get("max_wave"))
             fe_pct = wave_to_pct_ferry(all_day.get("max_wave"))
-            hs_am_pct = wave_to_pct_highspeed(morning.get("max_wave")) if morning else hs_pct
-            hs_pm_pct = wave_to_pct_highspeed(afternoon.get("max_wave")) if afternoon else hs_pct
+            hs_am_pct = wave_to_pct_highspeed(morning.get("max_wave")) if morning else None
+            hs_pm_pct = wave_to_pct_highspeed(afternoon.get("max_wave")) if afternoon else None
+            # 高速船の日中リスク = 運航時間帯(AM 6-12 / PM 12-18)の最大。
+            # all_day(6-20)を使うと高速船が運航しない夜間(18-20)の波で
+            # 見出しの欠航リスクがAM/PMの最大を上回る不具合があったため是正。
+            _hs = [p for p in (hs_am_pct, hs_pm_pct) if p is not None]
+            hs_pct = max(_hs) if _hs else wave_to_pct_highspeed(all_day.get("max_wave"))
+            if hs_am_pct is None:
+                hs_am_pct = hs_pct
+            if hs_pm_pct is None:
+                hs_pm_pct = hs_pct
         else:
             hs_pct = fe_pct = hs_am_pct = hs_pm_pct = 0
 
