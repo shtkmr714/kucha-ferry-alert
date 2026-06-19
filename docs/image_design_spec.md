@@ -398,13 +398,16 @@ Best production method:
 | 役割 | ファイル |
 |---|---|
 | 設計仕様（本書） | `docs/image_design_spec.md` |
-| 短期テンプレ | `assets/templates/Format_Zamami.png`（座間味・1254²） |
-| 短期テンプレ・運休例 | `assets/templates/Format_Zamami_Suspended.png` |
-| 長期 参考デザイン（縦長） | `assets/templates/Format_zamami_longterm.png` |
+| 短期テンプレ（座間味） | `assets/templates/Format_Zamami.png`（1254²・無変更） |
+| 短期テンプレ・運休例（座間味） | `assets/templates/Format_Zamami_Suspended.png` |
+| 短期テンプレ（渡嘉敷） | `assets/templates/format_Tokashiki_short.jpg`（1254²・カード座標は座間味と別） |
+| 長期 参考デザイン（縦長4:5） | `assets/templates/Format_zamami_longterm.png` / `format_Tokashiki_long.png`（合成には使わず島マップ抽出元・デザイン参照） |
+| 島マップ（透過PNG・島名テキストなし） | `assets/templates/island_zamami.png`（慶良間群島）/ `island_tokashiki_clean.png`（渡嘉敷） |
 | フォント | `assets/fonts/`（Manrope, Inter + OFLライセンス） |
 | JSONサンプル | `docs/samples/short_term_forecast_sample.json` / `long_term_forecast_sample.json` |
-| 短期レンダラ | `forecast_publisher.py` → `make_image_short()` ✅テンプレ合成で実装済 |
-| 長期レンダラ | `forecast_publisher.py` → `make_image_longterm()` ✅新デザインをPILで正方形1254²再構築（参考テンプレは縦長のため流用せず同デザインを実装） |
+| 航路設定 | `forecast_publisher.py` → `ROUTES` dict / `_route()`（label・route line・島マップ・短期テンプレ・短期カード座標・公式HP名を航路別に保持） |
+| 短期レンダラ | `forecast_publisher.py` → `make_image_short(forecast, output_path, route_id)` ✅テンプレ合成・航路別カード座標で実装済 |
+| 長期レンダラ | `forecast_publisher.py` → `make_image_longterm(forecast, output_path, route_id)` ✅正方形1254²・**固定背景（島マップ＋カード枠＋静的ラベル）はメモリキャッシュで初回のみ描画→再利用し、可変部のみオーバーレイ**（`_render_longterm_static()` / `_get_longterm_bg()`） |
 | リスク5段階・色 | `forecast_publisher.py` → `_risk_band()` ✅本書の色スケールと一致 |
 | 運休枠（点線＋公式発表） | `forecast_publisher.py` → `_draw_suspended_box()` ✅本書準拠 |
 | display_risk 計算 | `forecast_publisher.py` → `effective_max_pct()` ✅本書「運航中船種の最大」と一致 |
@@ -429,12 +432,20 @@ Best production method:
 
 1. **キャンバス＝正方形 1254²で統一（確定）**。カルーセル3枚（①短期/②長期/③気象データ）すべて1254²。
    - 短期＝テンプレ native 1254²。長期＝PILで1254²直接描画。気象データ＝1080描画→保存時に1254²へ拡大。
-2. **長期は正方形にPIL再構築済み**（参考テンプレ `Format_zamami_longterm.png` は縦長4:5のため画像合成には使わず、同じデザイン言語を1254²で実装）。
+2. **長期は正方形1254²で新デザイン再現済み**。参考テンプレ（縦長4:5）は合成に使わず、
+   「左に島マップ＋右にリスク期間カード＋下に高速船/フェリー2列の日別バー」を1254²で実装。
+   **固定背景はディスクに焼かず、プロセス内メモリ（`_LONGTERM_BG_CACHE`）に初回描画分をキャッシュして再利用**する。
+   → 理由：本番(CI)はFS揮発・1実行1描画でディスクキャッシュは無益。さらに `assets/templates/` はgit管理対象のため、
+     ローカルフォントで焼いた背景PNGを誤コミットすると本番が再描画せず使い回す事故になる。背景は毎プロセスNotoで描く。
 3. **フォント（確定）**：数字%=Manrope Bold / 英語=Inter Medium / 日本語=Noto Sans JP（CJK）Medium。§1 Fonts 参照。
-4. **長期の島マップは未実装**（縦長テンプレの写真マップが正方形に流用できないため、海グラデ背景に集約）。
-   正方形用の島マップ素材（透過PNG等）が用意できれば追加可能。
-5. **渡嘉敷・八重山**は同じテンプレ構造を流用予定（route_label / route_line / 島マップのみ差替）。
-   八重山は航路別の行構成に拡張（本書 §4 参照）。※現状は座間味のみ新デザイン適用。
+   （Windowsローカル開発のみ Noto 不在時に Yu Gothic 等へフォールバック。本番Linuxでは従来通り Noto 優先）。
+4. **長期の島マップ実装済み**。縦長参考テンプレから緑シルエットを透過PNGで抽出（島名テキスト除去＝§1準拠）。
+   `island_zamami.png` / `island_tokashiki_clean.png`。海グラデ背景（`_ocean_bg`）の左に配置。
+5. **航路の使い回し（`ROUTES`）**：同一テンプレ構造を route_id で切替。差し替えるのは
+   route_label / route_line / 島マップ / 短期テンプレ / 短期カード座標（テンプレごとに実測）/ 公式HP名 のみ。
+   - 現状の適用：座間味＝短期(既存)＋長期(新デザイン)。渡嘉敷＝短期＋長期（画像フォーマット実装済・テスト段階。
+     `generate_images()`/`run_publisher()` への本番配線＝データ取得・別アカウント投稿は未対応）。
+   - 八重山は航路別の行構成へ拡張予定（本書 §4 参照・未実装）。
 
 ## 7-5. 検証（軽量バリデーション）
 レンダリング前に最低限：
