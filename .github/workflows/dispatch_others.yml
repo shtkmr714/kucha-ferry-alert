@@ -1,20 +1,22 @@
 name: Dispatch Tokashiki & Yaeyama
 
 # kucha-ferry-alert（座間味）が cron-job.org から workflow_dispatch で起動された後、
-# 14:30 JST まで待機してから渡嘉敷・八重山を dispatch する。
+# 渡嘉敷・八重山を連鎖 dispatch する。
 #
-# 14:30 JST を指定する理由:
-#   Open-Meteo のモデルデータは当日 UTC 00:00 ランが UTC 05:00〜05:30 頃に出揃う。
-#   JST 14:30 = UTC 05:30 がそのタイミングに相当し、朝投稿（UTC 18:00 前夜ラン）と
-#   異なる最新データを取得できる最も早い時刻。
-#   cron-job.org は 13:00 JST（UTC 04:00）に Zamami を発火させるが、
-#   そのまま連鎖すると朝と同じデータになるため、ここで 14:30 まで待機する。
+# 朝（8:15 トリガー）   : 即時 dispatch（8:15台に投稿）
+# 午後（13:00 トリガー）: 14:30 JST まで待機してから dispatch
+#   理由: Open-Meteo の当日 UTC 00:00 ランが UTC 05:00〜05:30 頃に出揃う。
+#         JST 14:30 = UTC 05:30 が、朝投稿（前夜ラン）と異なる最新データを取れる最も早い時刻。
+#         cron-job.org は 13:00 JST に座間味を発火させるため、そのまま連鎖すると朝と同じデータになる。
+#
+# 重要（過去のバグ）: 以前は朝・午後とも無条件で 14:30 まで待機していたため、
+#   朝トリガー（8:15）も 14:30 まで sleep → ジョブ timeout(120分)で 10:17 頃に強制終了し、
+#   渡嘉敷・八重山の朝投稿が発生しなかった。→ 待機を「午後トリガーのみ」に限定して是正。
 #
 # ポイント:
 #   - workflow_run の if 条件で event == 'workflow_dispatch' に絞り込むことで
 #     GitHub Actions cron による遅延実行時には発火しない
 #   - 渡嘉敷・八重山側の時刻ガードは workflow_dispatch を許可しているため問題なし
-#   - timeout-minutes: 120（最大約90分の待機を想定）
 
 on:
   workflow_run:
@@ -28,16 +30,22 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Wait until 14:30 JST
+      - name: Wait until 14:30 JST (afternoon trigger only)
         run: |
-          TARGET_EPOCH=$(TZ=Asia/Tokyo date -d "today 14:30:00" +%s)
-          NOW_EPOCH=$(TZ=Asia/Tokyo date +%s)
-          SLEEP_SEC=$((TARGET_EPOCH - NOW_EPOCH))
-          if [ $SLEEP_SEC -gt 0 ]; then
-            echo "現在 $(TZ=Asia/Tokyo date '+%H:%M') JST → 14:30 JST まで ${SLEEP_SEC}秒 待機"
-            sleep $SLEEP_SEC
+          HOUR=$((10#$(TZ=Asia/Tokyo date +%H)))
+          NOW_HM=$(TZ=Asia/Tokyo date '+%H:%M')
+          if [ "$HOUR" -ge 11 ]; then
+            TARGET=$(TZ=Asia/Tokyo date -d "today 14:30:00" +%s)
+            NOW=$(TZ=Asia/Tokyo date +%s)
+            SLEEP_SEC=$((TARGET - NOW))
+            if [ $SLEEP_SEC -gt 0 ]; then
+              echo "午後トリガー ($NOW_HM JST) → 14:30 JST まで ${SLEEP_SEC}秒 待機"
+              sleep $SLEEP_SEC
+            else
+              echo "すでに 14:30 JST 以降 ($NOW_HM JST) → 即時 dispatch"
+            fi
           else
-            echo "すでに 14:30 JST 以降 ($(TZ=Asia/Tokyo date '+%H:%M') JST) → 即時 dispatch"
+            echo "朝トリガー ($NOW_HM JST) → 即時 dispatch"
           fi
 
       - name: Dispatch Tokashiki Ferry Logger
