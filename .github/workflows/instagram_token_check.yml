@@ -1,6 +1,5 @@
 name: Instagram Token Check
 
-# 投稿は一切しない。トークンの有効性・対応ホスト・USER_ID の整合だけを GET で確認する。
 on:
   workflow_dispatch:
 
@@ -14,28 +13,11 @@ jobs:
           INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
         run: |
           set +e
-          echo "TOKEN length : ${#INSTAGRAM_ACCESS_TOKEN}"
-          echo "USER_ID length: ${#INSTAGRAM_USER_ID}"
-          echo ""
-
-          echo "=== 1) graph.instagram.com /me  (Instagram Login 方式) ==="
-          code=$(curl -s -o /tmp/a.json -w "%{http_code}" \
-            "https://graph.instagram.com/me?fields=user_id,username&access_token=${INSTAGRAM_ACCESS_TOKEN}")
-          echo "HTTP $code"; cat /tmp/a.json; echo; echo
-
-          echo "=== 2) graph.facebook.com /me  (Facebook Login 方式) ==="
-          code=$(curl -s -o /tmp/b.json -w "%{http_code}" \
-            "https://graph.facebook.com/v25.0/me?access_token=${INSTAGRAM_ACCESS_TOKEN}")
-          echo "HTTP $code"; cat /tmp/b.json; echo; echo
-
-          echo "=== 3) graph.facebook.com /{USER_ID}  (本番コードが叩く経路) ==="
-          code=$(curl -s -o /tmp/c.json -w "%{http_code}" \
-            "https://graph.facebook.com/v25.0/${INSTAGRAM_USER_ID}?fields=username&access_token=${INSTAGRAM_ACCESS_TOKEN}")
-          echo "HTTP $code"; cat /tmp/c.json; echo; echo
-
-          echo "=== 4) graph.instagram.com /{USER_ID} ==="
-          code=$(curl -s -o /tmp/d.json -w "%{http_code}" \
-            "https://graph.instagram.com/${INSTAGRAM_USER_ID}?fields=username&access_token=${INSTAGRAM_ACCESS_TOKEN}")
-          echo "HTTP $code"; cat /tmp/d.json; echo; echo
-
-          echo "※ 3) が 200 なら現行コードのまま復旧。1)/4) だけ 200 なら graph.instagram.com への移行（A案）が必要。"
+          for V in "" "v25.0/" "v23.0/" "v21.0/"; do
+            echo "=== graph.instagram.com/${V}{USER_ID} ==="
+            code=$(curl -s -o /tmp/x.json -w "%{http_code}" \
+              "https://graph.instagram.com/${V}${INSTAGRAM_USER_ID}?fields=username&access_token=${INSTAGRAM_ACCESS_TOKEN}")
+            echo "HTTP $code"; cat /tmp/x.json; echo; echo
+          done
+          echo "=== token expiry (debug via graph.instagram.com/me) ==="
+          curl -s "https://graph.instagram.com/me?fields=user_id,username&access_token=${INSTAGRAM_ACCESS_TOKEN}"; echo
