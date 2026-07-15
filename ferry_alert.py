@@ -892,8 +892,23 @@ def load_manual_suspensions():
 SUSPENSION_HP_CHECK_DAYS = 10  # 開始日まで10日以内のみHP照合チェックを行う
 
 
+def _parse_iso_date(s):
+    """'YYYY-MM-DD' を date に変換。空・不正なら None。"""
+    from datetime import date as _date
+    try:
+        return _date.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
 def detect_suspension_conflicts(scraped, manual):
-    """スクレイプと手動入力の運休情報を比較し、齟齬を検出する"""
+    """スクレイプと手動入力の運休情報を比較し、齟齬を検出する。
+
+    照合するのは「これから起きる／進行中」の運休だけ。以下はHPとずれていて当然なので
+    アラートしない（毎日同じ指摘が出続けるのを防ぐ）:
+      - 終了日が過去の運休 … HPから掲載が消えるのが正常
+      - 開始日が SUSPENSION_HP_CHECK_DAYS より先の運休 … HP未掲載が正常
+    """
     from datetime import date as _date
     today = _date.today()
     conflicts = []
@@ -901,13 +916,16 @@ def detect_suspension_conflicts(scraped, manual):
         m_start = m.get("start", "")
         m_end = m.get("end", "")
         m_service = m.get("service", "")
+
+        # すでに終了した運休はHPから消えて当然 → 照合対象外（過去の齟齬を通知しない）
+        end_d = _parse_iso_date(m_end) or _parse_iso_date(m_start)
+        if end_d and end_d < today:
+            continue
+
         # 開始日まで10日以上先の場合はHPに未掲載でも正常 → HP照合スキップ
-        try:
-            days_until = (_date.fromisoformat(m_start) - today).days
-            if days_until > SUSPENSION_HP_CHECK_DAYS:
-                continue
-        except (ValueError, TypeError):
-            pass
+        start_d = _parse_iso_date(m_start)
+        if start_d and (start_d - today).days > SUSPENSION_HP_CHECK_DAYS:
+            continue
         matching = [s for s in scraped
                     if s.get("service") in (m_service, "both") or m_service == "both"]
         if not matching:
