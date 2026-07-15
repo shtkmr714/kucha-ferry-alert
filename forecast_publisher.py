@@ -1520,7 +1520,7 @@ def post_to_instagram(image_paths, caption):
         media_ids = []
         for img_url in image_urls:
             resp = requests.post(
-                f"https://graph.facebook.com/v25.0/{user_id}/media",
+                f"https://graph.instagram.com/v25.0/{user_id}/media",
                 params={"image_url": img_url, "is_carousel_item": "true", "access_token": access_token}
             )
             data = resp.json()
@@ -1532,7 +1532,7 @@ def post_to_instagram(image_paths, caption):
 
         # Step3: カルーセルコンテナを作成
         resp = requests.post(
-            f"https://graph.facebook.com/v25.0/{user_id}/media",
+            f"https://graph.instagram.com/v25.0/{user_id}/media",
             params={
                 "media_type": "CAROUSEL",
                 "children": ",".join(media_ids),
@@ -1553,7 +1553,7 @@ def post_to_instagram(image_paths, caption):
 
         # Step4: 投稿を公開
         resp = requests.post(
-            f"https://graph.facebook.com/v25.0/{user_id}/media_publish",
+            f"https://graph.instagram.com/v25.0/{user_id}/media_publish",
             params={"creation_id": carousel_id, "access_token": access_token}
         )
         data = resp.json()
