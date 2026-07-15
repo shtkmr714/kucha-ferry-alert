@@ -59,6 +59,12 @@ SCORE_FERRY_RISK = 0.65
 
 ZAMAMI_URL = "https://www.vill.zamami.okinawa.jp/info/ship.html"
 
+# Claude モデル。旧 claude-sonnet-4-20250514 は2026年6月に提供終了し404になった。
+CLAUDE_MODEL = "claude-sonnet-5"
+# thinking を省略すると adaptive thinking が既定でオンになり、resp.content[0] が
+# thinking ブロックになって .text が取れなくなるため、明示的に無効化する。
+CLAUDE_THINKING = {"type": "disabled"}
+
 # ============================================================
 # 1. データ取得
 # ============================================================
@@ -720,7 +726,8 @@ def generate_shortterm_message(analysis, ferry_status, warnings):
 """
 
     resp = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=CLAUDE_MODEL,
+        thinking=CLAUDE_THINKING,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -783,7 +790,8 @@ def generate_longterm_message(analysis, warnings):
 """
 
     resp = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=CLAUDE_MODEL,
+        thinking=CLAUDE_THINKING,
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -839,7 +847,8 @@ def scrape_planned_suspensions():
         year = datetime.now(JST).year
 
         resp_ai = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_MODEL,
+            thinking=CLAUDE_THINKING,
             max_tokens=500,
             messages=[{"role": "user", "content": f"""以下は座間味村HPから抽出したテキストです。
 計画的な運休・ドック入りの情報を抽出してJSON配列で返してください。
