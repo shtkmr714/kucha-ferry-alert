@@ -1477,6 +1477,10 @@ def upload_image_to_github(image_path, filename):
     raise Exception(f"GitHub upload failed: {resp.status_code} {resp.text[:200]}")
 
 
+class InstagramPostError(Exception):
+    """Instagram投稿の失敗。呼び出し側で通知しジョブを失敗させるために送出する。"""
+
+
 def post_to_instagram(image_paths, caption):
     """Instagram にカルーセル投稿（画像3枚）"""
     access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
@@ -1525,8 +1529,7 @@ def post_to_instagram(image_paths, caption):
             )
             data = resp.json()
             if "id" not in data:
-                print(f"  [エラー] メディアコンテナ作成失敗: {data}")
-                return False
+                raise InstagramPostError(f"メディアコンテナ作成失敗: {data}")
             media_ids.append(data["id"])
             print(f"  メディアコンテナ: {data['id']}")
 
@@ -1542,8 +1545,7 @@ def post_to_instagram(image_paths, caption):
         )
         data = resp.json()
         if "id" not in data:
-            print(f"  [エラー] カルーセルコンテナ作成失敗: {data}")
-            return False
+            raise InstagramPostError(f"カルーセルコンテナ作成失敗: {data}")
         carousel_id = data["id"]
         print(f"  カルーセルコンテナ: {carousel_id}")
 
@@ -1558,15 +1560,15 @@ def post_to_instagram(image_paths, caption):
         )
         data = resp.json()
         if "id" not in data:
-            print(f"  [エラー] 投稿失敗: {data}")
-            return False
+            raise InstagramPostError(f"投稿の公開に失敗: {data}")
 
         print(f"  ✅ Instagram投稿完了: post_id={data['id']}")
         return True
 
+    except InstagramPostError:
+        raise
     except Exception as e:
-        print(f"  [警告] Instagram投稿エラー: {e}")
-        return False
+        raise InstagramPostError(f"Instagram投稿エラー: {e}") from e
 
 
 # ============================================================

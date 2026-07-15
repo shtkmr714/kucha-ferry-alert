@@ -11,6 +11,7 @@ Kucha Ferry Alert System v3
 import os
 import json
 import math
+import traceback
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -802,13 +803,32 @@ def generate_longterm_message(analysis, warnings):
 # 4. Slack通知
 # ============================================================
 
+SECRET_ENV_KEYS = (
+    "INSTAGRAM_ACCESS_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "DISPATCH_TOKEN",
+    "GITHUB_TOKEN",
+)
+
+
+def redact_secrets(text):
+    """例外メッセージにはトークン付きURLが含まれうる。Slackは自動マスクしないので自前で伏せる。"""
+    out = str(text)
+    for key in SECRET_ENV_KEYS:
+        val = os.environ.get(key)
+        if val and len(val) >= 8:
+            out = out.replace(val, f"***{key}***")
+    return out
+
+
 def send_slack(message, emoji="⚠️"):
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
         print("[Slack通知スキップ] SLACK_WEBHOOK_URLが未設定です")
         return False
 
-    payload = {"text": f"{emoji} {message}"}
+    payload = {"text": f"{emoji} {redact_secrets(message)}"}
     resp = requests.post(webhook_url, json=payload, timeout=10)
     return resp.status_code == 200
 
@@ -1251,7 +1271,11 @@ def run_ferry_check():
                       post_to_social=post_to_social,
                       typhoon_by_date=typhoon_by_date)
     except Exception as e:
-        print(f"  [警告] Publisher実行エラー: {e}")
+        # ここで握り潰していたため、トークン失効による投稿停止に1週間気づけなかった。
+        # Slackで通知し、ワークフローも失敗させる（success のまま終わらせない）。
+        traceback.print_exc()
+        send_slack(f"Publisher実行エラー（投稿されていない可能性があります）: {e}", emoji="🚨")
+        raise
 
     print("\n処理完了。")
 
