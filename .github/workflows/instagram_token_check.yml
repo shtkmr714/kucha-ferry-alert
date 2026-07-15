@@ -1,5 +1,6 @@
 name: Instagram Token Check
 
+# 読み取り＋メディアコンテナ作成のみ。media_publish は呼ばないので「公開投稿はされない」。
 on:
   workflow_dispatch:
 
@@ -7,17 +8,27 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Instagram token (read-only, no posting)
+      - name: Verify token & publishing permission (NO public post)
         env:
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
         run: |
           set +e
-          for V in "" "v25.0/" "v23.0/" "v21.0/"; do
-            echo "=== graph.instagram.com/${V}{USER_ID} ==="
-            code=$(curl -s -o /tmp/x.json -w "%{http_code}" \
-              "https://graph.instagram.com/${V}${INSTAGRAM_USER_ID}?fields=username&access_token=${INSTAGRAM_ACCESS_TOKEN}")
-            echo "HTTP $code"; cat /tmp/x.json; echo; echo
-          done
-          echo "=== token expiry (debug via graph.instagram.com/me) ==="
-          curl -s "https://graph.instagram.com/me?fields=user_id,username&access_token=${INSTAGRAM_ACCESS_TOKEN}"; echo
+          IMG="https://shtkmr714.github.io/kucha-ferry-alert/images/img1_header_20260513_2052.png"
+
+          echo "=== 1) token identity (GET /me) ==="
+          curl -s "https://graph.instagram.com/me?fields=user_id,username&access_token=${INSTAGRAM_ACCESS_TOKEN}"; echo; echo
+
+          echo "=== 2) create media container (NOT published) ==="
+          code=$(curl -s -o /tmp/m.json -w "%{http_code}" -X POST \
+            "https://graph.instagram.com/v25.0/${INSTAGRAM_USER_ID}/media" \
+            -d "image_url=${IMG}" \
+            -d "caption=token check (not published)" \
+            -d "access_token=${INSTAGRAM_ACCESS_TOKEN}")
+          echo "HTTP $code"; cat /tmp/m.json; echo; echo
+
+          if [ "$code" = "200" ]; then
+            echo "RESULT: OK — token/host/publish permission all valid. (media_publish は実行していないため未公開)"
+          else
+            echo "RESULT: NG — 上のエラー内容を確認"
+          fi
