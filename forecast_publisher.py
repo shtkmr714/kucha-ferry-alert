@@ -408,10 +408,10 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         # リスク日が1日なら単日表示（「X〜X」にしない。座間味・渡嘉敷・西表で統一）
         if risk_start == risk_end:
             _risk_period = f"{risk_start}"
-            _risk_period_en = f"Around {risk_start_en}"
+            _risk_period_en = risk_start_en
         else:
             _risk_period = f"{risk_start}〜{risk_end}"
-            _risk_period_en = f"Around {risk_start_en} - {risk_end_en}"
+            _risk_period_en = f"{risk_start_en} - {risk_end_en}"
         long_term_summary = {
             "has_risk": True,
             "risk_period": _risk_period,
