@@ -405,10 +405,17 @@ def build_forecast_data(analysis, jma_waves, jma_prob, planned_suspensions=None,
         risk_start_en = risk_dates[0].strftime("%b %-d")
         risk_end_en = risk_dates[-1].strftime("%b %-d")
         max_lt_pct = max((effective_max_pct(d) for d in long_term), default=0)
+        # リスク日が1日なら単日表示（「X〜X頃」にしない。座間味・渡嘉敷・西表で統一）
+        if risk_start == risk_end:
+            _risk_period = f"{risk_start}頃"
+            _risk_period_en = f"Around {risk_start_en}"
+        else:
+            _risk_period = f"{risk_start}〜{risk_end}頃"
+            _risk_period_en = f"Around {risk_start_en} - {risk_end_en}"
         long_term_summary = {
             "has_risk": True,
-            "risk_period": f"{risk_start}〜{risk_end}頃",
-            "risk_period_en": f"Around {risk_start_en} - {risk_end_en}",
+            "risk_period": _risk_period,
+            "risk_period_en": _risk_period_en,
             "max_pct": max_lt_pct,
             "days": long_term,
         }
