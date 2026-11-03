@@ -11,6 +11,7 @@ Kucha Ferry Alert System v3
 import os
 import json
 import math
+import re
 import traceback
 import requests
 from datetime import datetime, timedelta
@@ -837,8 +838,74 @@ def send_slack(message, emoji="⚠️"):
 # 4-2. 計画運休情報
 # ============================================================
 
+_SUSPENSION_VESSELS = [
+    # (HP表記の正規表現, service, vessel_ja, vessel_en)
+    (r"ク[イィ]ーンざまみ", "highspeed", "クイーンざまみ", "Queen Zamami"),
+    (r"フェリーざまみ", "ferry", "フェリーざまみ3", "Ferry Zamami 3"),
+]
+_SUSPENSION_PERIOD_RE = re.compile(
+    r"(\d{1,2})月(\d{1,2})日[^0-9]{0,4}?[～〜~ー−\-][^0-9]{0,4}?(?:(\d{1,2})月)?(\d{1,2})日")
+
+
+def _infer_year(month, day, today):
+    """年表記のない「M月D日」を today に最も近い年の日付に解決する（年跨ぎ対応）。"""
+    from datetime import date as _date
+    candidates = []
+    for y in (today.year - 1, today.year, today.year + 1):
+        try:
+            candidates.append(_date(y, month, day))
+        except ValueError:
+            pass
+    return min(candidates, key=lambda d: abs((d - today).days)) if candidates else None
+
+
+def parse_suspensions_by_rule(lines, today):
+    """HP本文から「（船名）は、…運休…（M月D日～M月D日まで）」をルールで抽出する。
+
+    Claude 抽出が失敗（モデル提供終了・API障害等）すると計画運休が丸ごと落ち、
+    運休中の船に欠航%を出してしまう。HPの定型文はルールで確実に拾い、Claudeは補完に回す。
+    """
+    from datetime import date as _date
+    results = []
+    for line in lines:
+        if "運休" not in line:
+            continue
+        period = _SUSPENSION_PERIOD_RE.search(line)
+        if not period:
+            continue
+        for pat, service, vja, ven in _SUSPENSION_VESSELS:
+            # 船名が「運休」より前にある行のみ（他船の運休文の巻き込み防止）
+            vm = re.search(pat, line)
+            if not vm or vm.start() > line.find("運休"):
+                continue
+            sm, sd, em, ed = period.groups()
+            start = _infer_year(int(sm), int(sd), today)
+            if not start:
+                continue
+            em = int(em) if em else int(sm)
+            try:
+                end = _date(start.year, em, int(ed))
+            except ValueError:
+                continue
+            if end < start:
+                end = _date(start.year + 1, em, int(ed))
+            is_dock = "ドック" in line
+            results.append({
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "service": service,
+                "vessel_ja": vja,
+                "vessel_en": ven,
+                "reason_ja": "ドック入り" if is_dock else "計画運休",
+                "reason_en": "Dock Maintenance" if is_dock else "Planned Suspension",
+            })
+            break
+    return results
+
+
 def scrape_planned_suspensions():
-    """座間味村HPトップページから計画運休情報をスクレイプし、Claudeで構造化する"""
+    """座間味村HPトップページから計画運休情報をスクレイプし、ルール抽出＋Claudeで構造化する"""
+    rule_based = []
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get("https://www.vill.zamami.okinawa.jp/", headers=headers, timeout=10)
@@ -847,11 +914,13 @@ def scrape_planned_suspensions():
         text = soup.get_text(separator="\n", strip=True)
 
         lines = text.split("\n")
+        rule_based = parse_suspensions_by_rule(lines, datetime.now(JST).date())
+        print(f"  [計画運休スクレイプ] ルール抽出: {len(rule_based)}件")
         # クィーンざまみ（ィ有無両対応）も追加
         keywords = ["運休", "ドック", "クイーンざまみ", "クィーンざまみ", "フェリーざまみ", "高速船"]
         matched_indices = [i for i, l in enumerate(lines) if any(k in l for k in keywords)]
         if not matched_indices:
-            return []
+            return rule_based
 
         # 行単位フィルタだと日付と船名が別行に分かれた場合に日付が欠落する。
         # マッチ行の前後3行を含めてコンテキストを確保する。
@@ -892,16 +961,25 @@ def scrape_planned_suspensions():
 JSON配列のみ返してください（説明文不要）。"""}]
         )
 
-        import re
-        text_resp = resp_ai.content[0].text.strip()
+        text_resp = next((b.text for b in resp_ai.content if getattr(b, "type", "") == "text"), "").strip()
         match = re.search(r'\[.*\]', text_resp, re.DOTALL)
-        if not match:
-            return []
-        return json.loads(match.group())
+        ai_based = json.loads(match.group()) if match else []
+        print(f"  [計画運休スクレイプ] Claude抽出: {len(ai_based)}件")
 
     except Exception as e:
+        # 握りつぶすと運休が投稿から黙って消える（2026-11 クイーンざまみ事例）→ Slackで可視化
         print(f"  [警告] 計画運休スクレイプエラー: {e}")
-        return []
+        send_slack(f"⚠️ 計画運休の取得・Claude抽出に失敗しました（ルール抽出 {len(rule_based)}件で継続）\n{e}\n"
+                   f"→ 座間味村HPの運休情報が投稿に反映されているか確認してください。", emoji="")
+        return rule_based
+
+    # ルール抽出を優先し、Claudeのみが拾った運休を補完
+    merged = list(rule_based)
+    keys = {(s["start"], s["end"], s["service"]) for s in rule_based}
+    for s in ai_based:
+        if isinstance(s, dict) and (s.get("start"), s.get("end"), s.get("service")) not in keys:
+            merged.append(s)
+    return merged
 
 
 def load_manual_suspensions():

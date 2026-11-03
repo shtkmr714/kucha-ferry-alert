@@ -9,5 +9,16 @@
     "reason_en": "Dock Maintenance",
     "added": "2026-05-20",
     "note": "座間味村HPより確認"
+  },
+  {
+    "start": "2026-10-20",
+    "end": "2026-12-03",
+    "service": "highspeed",
+    "vessel_ja": "クイーンざまみ",
+    "vessel_en": "Queen Zamami",
+    "reason_ja": "ドック入り",
+    "reason_en": "Dock Maintenance",
+    "added": "2026-11-03",
+    "note": "座間味村HPより確認（スクレイプ取りこぼしのため手動追加）"
   }
 ]
